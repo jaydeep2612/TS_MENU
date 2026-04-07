@@ -1,0 +1,20 @@
+export const THEME = {
+  primary: "#ff6933",
+  primaryLight: "rgba(255, 105, 51, 0.1)",
+  background: "#f8f6f5",
+  backgroundDark: "#23140f",
+  cardBg: "#ffffff",
+  cardBgDark: "#2d1b15",
+  textPrimary: "#181210",
+  textSecondary: "#8d6a5e",
+  status: {
+    available: "#28a745",
+    occupied: "#dc3545",
+    cleaning: "#ffc107",
+  },
+  success: "#10b981",
+  successLight: "#ecfdf5",
+  warning: "#f59e0b",
+  danger: "#ef4444",
+  border: "#e5e7eb",
+};
