@@ -15,6 +15,7 @@ import {
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Platform,
   SafeAreaView,
   StyleSheet,
@@ -27,6 +28,22 @@ import { THEME } from "../constants/theme";
 import { useSession } from "../context/SessionContext";
 import { initEcho } from "../services/echo";
 import { SessionService } from "../services/session.service";
+
+// ─── Ann Sathi Brand Colors ───────────────────────────────────────────────────
+const ANN = {
+  orange: "#fe9a54",
+  red: "#f16b3f",
+  blue: "#456aba",
+  darkBlue: "#2a4795",
+  orangeLight: "#fff4ec",
+  redLight: "#fff0eb",
+  blueLight: "#eef2fb",
+  darkBlueLight: "#e8ecf7",
+  textPrimary: "#1e293b",
+  textSecondary: "#64748b",
+  border: "#e2e8f0",
+};
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function JoinScreen() {
   const rootNavigationState = useRootNavigationState();
@@ -56,6 +73,7 @@ export default function JoinScreen() {
   const [existingHostName, setExistingHostName] = useState<string | null>(null);
   const [showJoinChoice, setShowJoinChoice] = useState(false);
   const [selectedMode, setSelectedMode] = useState<"new" | "join">("new");
+
   const [tableDisplayNumber, setTableDisplayNumber] = useState<string | null>(
     null,
   );
@@ -113,6 +131,7 @@ export default function JoinScreen() {
   const echoRef = useRef<any>(null);
   const isMountedRef = useRef(true);
 
+  // HYBRID WEBSOCKET + POLLING FALLBACK SYSTEM
   useEffect(() => {
     isMountedRef.current = true;
     let channel: any = null;
@@ -185,6 +204,7 @@ export default function JoinScreen() {
     };
   }, [joinStatus, sessionToken, tableData]);
 
+  // Handle Customer Redirects
   useEffect(() => {
     if (
       sessionToken &&
@@ -214,58 +234,78 @@ export default function JoinScreen() {
     }
   }, [customerName, selectedMode, startSession]);
 
+  // ─── REUSABLE BACKGROUND WRAPPER ───
+  const renderWithBackground = (content: React.ReactNode) => (
+    <View style={styles.mainWrapper}>
+      <Image
+        source={require("../assets/images/bg.png")}
+        style={styles.bgImage}
+      />
+      <View style={styles.bgOverlay} />
+      {content}
+    </View>
+  );
+
   if (!rootNavigationState?.key) {
-    return (
+    return renderWithBackground(
       <SafeAreaView style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={THEME.primary} />
-      </SafeAreaView>
+        <ActivityIndicator size="large" color={ANN.orange} />
+      </SafeAreaView>,
     );
   }
 
   if (validating && r && t && token) {
-    return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={THEME.primary} />
-        <Text style={{ marginTop: 16, color: THEME.textSecondary }}>
+    return renderWithBackground(
+      <SafeAreaView style={styles.centerContainer}>
+        <ActivityIndicator size="large" color={ANN.orange} />
+        <Text
+          style={{ marginTop: 16, color: ANN.darkBlue, fontWeight: "bold" }}
+        >
           Checking table status...
         </Text>
-      </View>
+      </SafeAreaView>,
     );
   }
 
+  // 👇 FALLBACK UI (NO QR SCANNED) - UPDATED TO USE IMAGE LOGO 👇
   if (!r || !t || !token) {
-    return (
-      <SafeAreaView
-        style={[styles.centerContainer, { backgroundColor: "#23140f" }]}
-      >
-        <View style={{ alignItems: "center", marginBottom: 40 }}>
-          <MaterialIcons
-            name="restaurant-menu"
-            size={80}
-            color={THEME.primary}
-          />
+    return renderWithBackground(
+      <SafeAreaView style={styles.centerContainer}>
+        <View style={{ alignItems: "center", marginBottom: 40, marginTop: 40 }}>
+          {/* 🌟 यहाँ आइकॉन हटाकर आपकी असली इमेज लगा दी गई है 🌟 */}
+          <View style={styles.logoWrapperBig}>
+            <Image
+              source={require("../assets/images/ann-sathi.png")}
+              style={styles.logoImageBig}
+            />
+          </View>
+        </View>
+        <Text style={styles.welcomeTitle}>Welcome to Ann Sathi!</Text>
+        <Text style={[styles.subtitle, { marginBottom: 32 }]}>
+          Please scan the QR code on your table to view the menu and place your
+          order.
+        </Text>
+        <TouchableOpacity>
+          <MaterialIcons name="badge" size={24} color="#FFF" />
           <Text
             style={{
-              fontSize: 32,
-              fontWeight: "bold",
-              color: "#fff",
-              marginTop: 16,
+              color: "#FFF",
+              fontWeight: "900",
+              fontSize: 16,
+              letterSpacing: 1,
             }}
           >
-            TechStrota POS
+            Waiter Login
           </Text>
-          <Text style={{ color: "rgba(255,255,255,0.6)", marginTop: 8 }}>
-            Please scan a QR code to order
-          </Text>
-        </View>
-      </SafeAreaView>
+        </TouchableOpacity>
+      </SafeAreaView>,
     );
   }
 
   if (isTableReserved) {
-    return (
-      <View style={styles.centerContainer}>
-        <MaterialIcons name="calendar-today" size={80} color="#ec4899" />
+    return renderWithBackground(
+      <SafeAreaView style={styles.centerContainer}>
+        <MaterialIcons name="calendar-today" size={80} color={ANN.red} />
         <Text style={styles.welcomeTitle}>Table Reserved</Text>
         <Text style={styles.subtitle}>
           This table is currently reserved for upcoming guests. Please scan the
@@ -275,22 +315,18 @@ export default function JoinScreen() {
           onPress={async () => await Updates.reloadAsync()}
           style={[
             styles.joinButton,
-            {
-              width: "80%",
-              marginTop: 32,
-              backgroundColor: THEME.textSecondary,
-            },
+            { width: "80%", marginTop: 32, backgroundColor: ANN.darkBlue },
           ]}
         >
           <Text style={styles.joinButtonText}>Check Again</Text>
         </TouchableOpacity>
-      </View>
+      </SafeAreaView>,
     );
   }
 
   if (joinStatus === "rejected") {
-    return (
-      <View style={styles.centerContainer}>
+    return renderWithBackground(
+      <SafeAreaView style={styles.centerContainer}>
         <MaterialIcons name="cancel" size={80} color={THEME.danger} />
         <Text style={styles.welcomeTitle}>Access Denied</Text>
         <Text style={styles.subtitle}>
@@ -298,18 +334,21 @@ export default function JoinScreen() {
         </Text>
         <TouchableOpacity
           onPress={clearSession}
-          style={[styles.joinButton, { width: "80%", marginTop: 24 }]}
+          style={[
+            styles.joinButton,
+            { width: "80%", marginTop: 24, backgroundColor: ANN.darkBlue },
+          ]}
         >
           <Text style={styles.joinButtonText}>Start Over</Text>
         </TouchableOpacity>
-      </View>
+      </SafeAreaView>,
     );
   }
 
   if (isTableFull) {
-    return (
-      <View style={styles.centerContainer}>
-        <MaterialIcons name="event-seat" size={80} color={THEME.warning} />
+    return renderWithBackground(
+      <SafeAreaView style={styles.centerContainer}>
+        <MaterialIcons name="event-seat" size={80} color={ANN.orange} />
         <Text style={styles.welcomeTitle}>Table is Full</Text>
         <Text style={styles.subtitle}>
           Sorry, this table has reached its maximum seating capacity. Please
@@ -319,49 +358,48 @@ export default function JoinScreen() {
           onPress={async () => await Updates.reloadAsync()}
           style={[
             styles.joinButton,
-            {
-              width: "80%",
-              marginTop: 24,
-              backgroundColor: THEME.textSecondary,
-            },
+            { width: "80%", marginTop: 24, backgroundColor: ANN.darkBlue },
           ]}
         >
           <Text style={styles.joinButtonText}>Refresh Status</Text>
         </TouchableOpacity>
-      </View>
+      </SafeAreaView>,
     );
   }
 
   if (joinStatus === "pending") {
-    return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={THEME.warning} />
+    return renderWithBackground(
+      <SafeAreaView style={styles.centerContainer}>
+        <ActivityIndicator size="large" color={ANN.orange} />
         <Text style={styles.welcomeTitle}>Waiting...</Text>
         <Text style={styles.subtitle}>
           Waiting for{" "}
-          <Text style={{ fontWeight: "bold", color: THEME.textPrimary }}>
+          <Text style={{ fontWeight: "bold", color: ANN.darkBlue }}>
             {existingHostName || "Host"}
           </Text>{" "}
           to approve you.
         </Text>
         <TouchableOpacity onPress={clearSession} style={{ marginTop: 32 }}>
-          <Text style={{ color: THEME.danger, fontWeight: "bold" }}>
+          <Text
+            style={{ color: THEME.danger, fontWeight: "bold", fontSize: 16 }}
+          >
             Cancel Request
           </Text>
         </TouchableOpacity>
-      </View>
+      </SafeAreaView>,
     );
   }
 
   const isButtonDisabled = !customerName.trim() || loading;
 
-  return (
+  // 👇 MAIN JOIN FORM UI 👇
+  return renderWithBackground(
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <View style={styles.iconCircle}>
-          <MaterialIcons name="restaurant" size={24} color={THEME.primary} />
+          <MaterialIcons name="restaurant" size={24} color={ANN.darkBlue} />
         </View>
-        <Text style={styles.headerTitle}>Welcome to our Restaurant</Text>
+        <Text style={styles.headerTitle}>Ann Sathi</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -369,11 +407,7 @@ export default function JoinScreen() {
         <Text style={styles.welcomeTitle}>Welcome!</Text>
 
         <View style={styles.tableBadge}>
-          <MaterialIcons
-            name="local-activity"
-            size={16}
-            color={THEME.primary}
-          />
+          <MaterialIcons name="local-activity" size={18} color={ANN.red} />
           <Text style={styles.tableBadgeText}>
             {tableDisplayNumber
               ? `Table ${tableDisplayNumber}`
@@ -387,7 +421,7 @@ export default function JoinScreen() {
               style={[styles.subtitle, { textAlign: "left", marginBottom: 12 }]}
             >
               Hosted by{" "}
-              <Text style={{ fontWeight: "bold", color: THEME.textPrimary }}>
+              <Text style={{ fontWeight: "900", color: ANN.darkBlue }}>
                 {existingHostName}
               </Text>
               . How do you want to order?
@@ -402,7 +436,7 @@ export default function JoinScreen() {
               <MaterialIcons
                 name="group"
                 size={28}
-                color={selectedMode === "join" ? "#FFF" : THEME.textPrimary}
+                color={selectedMode === "join" ? "#FFF" : ANN.darkBlue}
               />
               <View style={{ marginLeft: 16 }}>
                 <Text
@@ -425,6 +459,7 @@ export default function JoinScreen() {
                 </Text>
               </View>
             </TouchableOpacity>
+
             <TouchableOpacity
               style={[
                 styles.choiceCard,
@@ -435,7 +470,7 @@ export default function JoinScreen() {
               <MaterialIcons
                 name="receipt-long"
                 size={28}
-                color={selectedMode === "new" ? "#FFF" : THEME.textPrimary}
+                color={selectedMode === "new" ? "#FFF" : ANN.darkBlue}
               />
               <View style={{ marginLeft: 16 }}>
                 <Text
@@ -471,7 +506,7 @@ export default function JoinScreen() {
             <MaterialIcons
               name="person"
               size={24}
-              color={THEME.textSecondary}
+              color={ANN.darkBlue}
               style={styles.inputIcon}
             />
             <TextInput
@@ -503,36 +538,86 @@ export default function JoinScreen() {
           </TouchableOpacity>
         </View>
       </View>
-    </SafeAreaView>
+    </SafeAreaView>,
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: THEME.background },
+  // ── BACKGROUND STYLES ──
+  mainWrapper: {
+    flex: 1,
+    backgroundColor: "#ffffff",
+  },
+  bgImage: {
+    ...StyleSheet.absoluteFillObject,
+    width: "100%",
+    height: "100%",
+    resizeMode: "cover",
+    opacity: 0.15, // Light doodle watermark effect
+  },
+  bgOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(255, 255, 255, 0.85)", // Glass effect
+  },
+
+  container: { flex: 1, maxWidth: 480, width: "100%", alignSelf: "center" },
   centerContainer: {
     flex: 1,
-    backgroundColor: THEME.background,
     justifyContent: "center",
     alignItems: "center",
     padding: 24,
   },
+
+  // ── STAFF LOGIN FALLBACK (UPDATED WITH LOGO) ──
+  logoWrapperBig: {
+    width: 120,
+    height: 120,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  logoImageBig: {
+    width: "100%",
+    height: "100%",
+    resizeMode: "contain",
+  },
+  staffLoginBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    backgroundColor: ANN.darkBlue,
+    paddingVertical: 16,
+    paddingHorizontal: 32,
+    borderRadius: 14,
+    shadowColor: ANN.darkBlue,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+
+  // ── HEADER ──
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: THEME.border,
+    borderBottomColor: "rgba(42, 71, 149, 0.1)",
+    backgroundColor: "transparent",
   },
   iconCircle: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: THEME.primaryLight,
+    backgroundColor: ANN.blueLight,
     justifyContent: "center",
     alignItems: "center",
   },
-  headerTitle: { fontSize: 18, fontWeight: "bold", color: THEME.textPrimary },
+  headerTitle: { fontSize: 18, fontWeight: "900", color: ANN.darkBlue },
+
+  // ── CONTENT ──
   content: {
     flex: 1,
     alignItems: "center",
@@ -540,75 +625,105 @@ const styles = StyleSheet.create({
     paddingTop: 32,
   },
   welcomeTitle: {
-    fontSize: 32,
-    fontWeight: "bold",
-    color: THEME.textPrimary,
+    fontSize: 36,
+    fontWeight: "900",
+    color: ANN.darkBlue,
     marginBottom: 8,
     marginTop: 16,
   },
   subtitle: {
-    fontSize: 15,
-    color: THEME.textSecondary,
+    fontSize: 16,
+    color: ANN.textSecondary,
     textAlign: "center",
-    lineHeight: 22,
+    lineHeight: 24,
+    fontWeight: "500",
   },
   tableBadge: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: THEME.primaryLight,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    backgroundColor: ANN.orangeLight,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
     borderRadius: 20,
     marginBottom: 24,
+    borderWidth: 1,
+    borderColor: ANN.orange,
   },
-  tableBadgeText: { color: THEME.primary, fontWeight: "bold", marginLeft: 6 },
+  tableBadgeText: {
+    color: ANN.red,
+    fontWeight: "900",
+    fontSize: 16,
+    marginLeft: 6,
+  },
+
+  // ── CHOICES (JOIN OR NEW) ──
   choiceCard: {
     flexDirection: "row",
     alignItems: "center",
     padding: 16,
     borderRadius: 16,
     borderWidth: 2,
-    borderColor: THEME.border,
-    backgroundColor: THEME.cardBg,
+    borderColor: "rgba(42, 71, 149, 0.2)",
+    backgroundColor: "rgba(255, 255, 255, 0.7)",
     marginBottom: 12,
   },
   choiceCardActive: {
-    backgroundColor: THEME.primary,
-    borderColor: THEME.primary,
+    backgroundColor: ANN.darkBlue,
+    borderColor: ANN.darkBlue,
   },
   choiceTitle: {
-    fontWeight: "bold",
+    fontWeight: "800",
     fontSize: 16,
-    color: THEME.textPrimary,
-    marginBottom: 2,
+    color: ANN.darkBlue,
+    marginBottom: 4,
   },
-  choiceDesc: { fontSize: 13, color: THEME.textSecondary },
+  choiceDesc: { fontSize: 13, color: ANN.textSecondary, fontWeight: "500" },
+
+  // ── FORM AREA ──
   formArea: { width: "100%" },
   label: {
     fontSize: 14,
-    fontWeight: "600",
-    color: THEME.textPrimary,
+    fontWeight: "700",
+    color: ANN.darkBlue,
     marginBottom: 8,
     marginLeft: 4,
   },
   inputContainer: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: THEME.cardBg,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.8)",
+    borderWidth: 1.5,
+    borderColor: "rgba(42, 71, 149, 0.2)",
+    borderRadius: 14,
     height: 56,
     marginBottom: 24,
   },
   inputIcon: { paddingHorizontal: 16 },
-  input: { flex: 1, fontSize: 16, color: THEME.textPrimary },
+  input: {
+    flex: 1,
+    fontSize: 16,
+    color: ANN.textPrimary,
+    fontWeight: "600",
+    ...((Platform.OS === "web" ? { outlineStyle: "none" } : {}) as any),
+  },
+
+  // ── BUTTONS ──
   joinButton: {
-    backgroundColor: THEME.primary,
+    backgroundColor: ANN.orange,
     alignItems: "center",
     justifyContent: "center",
     height: 56,
-    borderRadius: 12,
+    borderRadius: 14,
+    shadowColor: ANN.orange,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  joinButtonText: { color: "#FFF", fontSize: 16, fontWeight: "bold" },
+  joinButtonText: {
+    color: "#FFF",
+    fontSize: 16,
+    fontWeight: "900",
+    letterSpacing: 1,
+  },
 });

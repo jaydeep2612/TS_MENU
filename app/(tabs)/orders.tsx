@@ -13,12 +13,24 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import QRCode from "react-native-qrcode-svg"; // 👈 ADDED
 import { THEME } from "../../constants/theme";
 import { useSession } from "../../context/SessionContext";
 import { initEcho } from "../../services/echo";
 import { OrderService } from "../../services/order.service";
 import { SessionService } from "../../services/session.service";
 import { billTabNotifier } from "./_layout";
+
+const ANN = {
+  orange: "#fe9a54",
+  red: "#f16b3f",
+  blue: "#456aba",
+  darkBlue: "#2a4795",
+  orangeLight: "#fff4ec",
+  redLight: "#fff0eb",
+  blueLight: "#eef2fb",
+  darkBlueLight: "#e8ecf7",
+};
 
 export default function OrdersTab() {
   const { sessionToken, tableData, menuData, orders, setOrders, clearSession } =
@@ -29,6 +41,13 @@ export default function OrdersTab() {
   const [connectionStatus, setConnectionStatus] = useState<
     "connecting" | "live" | "offline"
   >("connecting");
+
+  const [cancellingId, setCancellingId] = useState<string | number | null>(
+    null,
+  );
+  const [processingPaymentId, setProcessingPaymentId] = useState<
+    string | number | null
+  >(null); // 👈 ADDED
 
   const echoRef = useRef<any>(null);
   const processedEventsRef = useRef<Set<string>>(new Set());
@@ -48,7 +67,6 @@ export default function OrdersTab() {
           map.set(incoming.id, {
             ...existing,
             ...incoming,
-            // Strictly preserve the existing items if the incoming payload is a lightweight socket update
             items:
               incoming.items && incoming.items.length > 0
                 ? incoming.items
@@ -89,8 +107,15 @@ export default function OrdersTab() {
 
   useEffect(() => {
     const abortController = new AbortController();
-    fetchOrders(abortController.signal);
-    return () => abortController.abort();
+
+    fetchOrders(abortController.signal).catch((err) => {
+      if (err.name === "AbortError") return;
+      console.error(err);
+    });
+
+    return () => {
+      abortController.abort();
+    };
   }, [fetchOrders]);
 
   const onRefresh = () => {
@@ -147,7 +172,6 @@ export default function OrdersTab() {
         }
         if (event.order) {
           mergeOrders([event.order]);
-          // 👇 Trigger a silent background fetch to grab the full items array
           fetchOrders();
         }
       })
@@ -195,8 +219,91 @@ export default function OrdersTab() {
     }
   };
 
+  const executeCancel = async (orderId: string | number) => {
+    if (!sessionToken) return;
+    try {
+      setCancellingId(orderId);
+      await OrderService.cancelOrder(sessionToken, orderId);
+
+      if (Platform.OS === "web") {
+        window.alert("Order has been cancelled.");
+      } else {
+        Alert.alert("Success", "Order has been cancelled.");
+      }
+
+      fetchOrders();
+    } catch (error: any) {
+      const msg =
+        error.message ||
+        "The kitchen has already started preparing this order.";
+      if (Platform.OS === "web") window.alert(msg);
+      else Alert.alert("Cannot Cancel", msg);
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
+  const handleCancelOrder = (orderId: string | number) => {
+    if (Platform.OS === "web") {
+      const confirmed = window.confirm(
+        "Are you sure you want to cancel this order? This cannot be undone.",
+      );
+      if (confirmed) executeCancel(orderId);
+    } else {
+      Alert.alert(
+        "Cancel Order?",
+        "Are you sure you want to cancel this order? This cannot be undone.",
+        [
+          { text: "No, keep it", style: "cancel" },
+          {
+            text: "Yes, Cancel",
+            style: "destructive",
+            onPress: () => executeCancel(orderId),
+          },
+        ],
+      );
+    }
+  };
+
+  // 👇 NEW: Submits the payment notification to the manager 👇
+  const handlePaymentSubmitted = async (orderId: number, method: string) => {
+    if (!sessionToken) return;
+    try {
+      setProcessingPaymentId(orderId);
+      await OrderService.notifyPaymentDone(sessionToken, orderId, method);
+
+      if (Platform.OS === "web") {
+        window.alert("Payment Submitted! The manager is verifying your order.");
+      } else {
+        Alert.alert(
+          "Payment Submitted",
+          "The manager is verifying your payment and will start cooking soon.",
+        );
+      }
+
+      fetchOrders(); // Refresh status
+    } catch (e: any) {
+      Alert.alert(
+        "Error",
+        e.message || "Could not submit payment notification.",
+      );
+    } finally {
+      setProcessingPaymentId(null);
+    }
+  };
+
   const getStatusUI = (status: string) => {
     const s = status?.toLowerCase() || "";
+
+    // 👇 NEW: Payment Pending Status 👇
+    if (s === "payment_pending")
+      return {
+        color: THEME.danger,
+        bg: THEME.danger,
+        text: "Payment Required",
+        icon: "wallet-outline",
+      };
+
     if (s === "accepted")
       return {
         color: THEME.primary,
@@ -255,23 +362,40 @@ export default function OrdersTab() {
     index: number;
   }) => {
     const statusUI = getStatusUI(order.status);
+    const orderStatus = order.status?.toLowerCase() || "";
+
     const isCancelled =
-      order.status?.toLowerCase() === "cancelled" ||
-      order.status?.toLowerCase() === "rejected";
+      orderStatus === "cancelled" || orderStatus === "rejected";
+    const isPending =
+      orderStatus === "pending" ||
+      orderStatus === "placed" ||
+      orderStatus === "payment_pending";
+    const isPreparing = orderStatus === "preparing";
+
+    // 👇 NEW: Check if this specific order requires payment immediately
+    const isPaymentRequired = orderStatus === "payment_pending";
 
     const displayTotal = isCancelled
       ? 0
       : parseFloat(String(order.total_amount)) || 0;
 
-    // 👇 FIX: Calculate sequential display number (Oldest is #1)
-    // Since displayOrders is sorted newest first, we subtract the index from the total length.
     const displayOrderNumber = displayOrders.length - index;
+
+    // UPI String Generation
+    const upiId = menuData?.restaurant?.upi_id || "";
+    const restaurantName = menuData?.restaurant?.name || "Restaurant";
+    const pa = encodeURIComponent(upiId);
+    const pn = encodeURIComponent(restaurantName);
+    const tn = encodeURIComponent(`Order for Table ${tableData?.tId || ""}`);
+    const am = displayTotal.toFixed(2);
+    const upiString = `upi://pay?pa=${pa}&pn=${pn}&tn=${tn}&am=${am}&cu=INR`;
 
     return (
       <View
         style={[
           styles.orderCard,
           isCancelled && { opacity: 0.5, borderColor: THEME.danger },
+          isPaymentRequired && { borderColor: THEME.danger, borderWidth: 2 }, // Highlight unpaid orders
         ]}
       >
         <View style={styles.orderHeader}>
@@ -285,7 +409,6 @@ export default function OrdersTab() {
                 },
               ]}
             >
-              {/* 👇 Output the calculated display number instead of order.id 👇 */}
               Order #{displayOrderNumber}
             </Text>
             <Text style={styles.orderTime}>
@@ -387,6 +510,94 @@ export default function OrdersTab() {
             {displayTotal.toFixed(2)}
           </Text>
         </View>
+
+        {/* 👇 NEW: INLINE PAYMENT UI FOR PAY FIRST MODEL 👇 */}
+        {isPaymentRequired && (
+          <View style={styles.paymentSection}>
+            <Text style={styles.paymentRequiredTitle}>Action Required</Text>
+            <Text style={styles.paymentRequiredSub}>
+              Please pay {currency}
+              {displayTotal.toFixed(2)} to confirm your order.
+            </Text>
+
+            {upiId ? (
+              <View style={styles.qrBox}>
+                <QRCode value={upiString} size={120} />
+                <Text style={styles.qrText}>SCAN TO PAY VIA UPI</Text>
+              </View>
+            ) : (
+              <View style={styles.qrBox}>
+                <Ionicons name="wallet-outline" size={40} color={ANN.orange} />
+                <Text style={styles.qrText}>PAY AT COUNTER</Text>
+              </View>
+            )}
+
+            <View style={styles.paymentButtons}>
+              <TouchableOpacity
+                style={[styles.payBtn, { backgroundColor: THEME.success }]}
+                onPress={() => handlePaymentSubmitted(order.id, "upi")}
+                disabled={processingPaymentId === order.id}
+              >
+                {processingPaymentId === order.id ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.payBtnText}>Paid via UPI</Text>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.payBtn,
+                  {
+                    backgroundColor: THEME.cardBg,
+                    borderWidth: 1,
+                    borderColor: THEME.textSecondary,
+                  },
+                ]}
+                onPress={() => handlePaymentSubmitted(order.id, "cash")}
+                disabled={processingPaymentId === order.id}
+              >
+                {processingPaymentId === order.id ? (
+                  <ActivityIndicator color={THEME.textSecondary} />
+                ) : (
+                  <Text
+                    style={[styles.payBtnText, { color: THEME.textPrimary }]}
+                  >
+                    Pay Cash
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {isPending && (
+          <TouchableOpacity
+            style={styles.cancelBtn}
+            onPress={() => handleCancelOrder(order.id)}
+            disabled={cancellingId === order.id}
+          >
+            {cancellingId === order.id ? (
+              <ActivityIndicator color={THEME.danger} size="small" />
+            ) : (
+              <Text style={styles.cancelBtnText}>Cancel Order</Text>
+            )}
+          </TouchableOpacity>
+        )}
+
+        {isPreparing && (
+          <View style={styles.preparingWarningBox}>
+            <Ionicons
+              name="information-circle-outline"
+              size={16}
+              color={THEME.warning}
+            />
+            <Text style={styles.preparingWarningText}>
+              The kitchen is currently preparing this order. To cancel or return
+              an item, please call the waiter.
+            </Text>
+          </View>
+        )}
       </View>
     );
   };
@@ -496,7 +707,6 @@ export default function OrdersTab() {
                 onPress={async () => {
                   if (sessionToken) {
                     try {
-                      // Silently notify the manager in the background
                       await SessionService.requestBill(sessionToken);
                     } catch (e) {}
                   }
@@ -658,6 +868,31 @@ const styles = StyleSheet.create({
     borderTopColor: THEME.border,
   },
   totalText: { fontSize: 16, fontWeight: "bold", color: THEME.textPrimary },
+  cancelBtn: {
+    marginTop: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: THEME.danger,
+    alignItems: "center",
+    backgroundColor: THEME.cardBg,
+  },
+  cancelBtnText: { color: THEME.danger, fontWeight: "bold", fontSize: 14 },
+  preparingWarningBox: {
+    flexDirection: "row",
+    marginTop: 16,
+    padding: 10,
+    backgroundColor: "rgba(245, 158, 11, 0.1)",
+    borderRadius: 8,
+    alignItems: "center",
+  },
+  preparingWarningText: {
+    color: THEME.warning,
+    fontSize: 12,
+    marginLeft: 6,
+    flex: 1,
+    fontStyle: "italic",
+  },
   emptyState: {
     flex: 1,
     justifyContent: "center",
@@ -729,4 +964,53 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   askBillBtnText: { color: "#fff", fontSize: 18, fontWeight: "bold" },
+
+  // NEW PAYMENT SECTION STYLES
+  paymentSection: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: THEME.border,
+    alignItems: "center",
+    backgroundColor: "#fdf2f8",
+    padding: 16,
+    borderRadius: 12,
+  },
+  paymentRequiredTitle: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: THEME.danger,
+    marginBottom: 4,
+  },
+  paymentRequiredSub: {
+    fontSize: 13,
+    color: THEME.textSecondary,
+    marginBottom: 16,
+    textAlign: "center",
+  },
+  qrBox: {
+    backgroundColor: "#fff",
+    padding: 12,
+    borderRadius: 12,
+    alignItems: "center",
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+  qrText: {
+    fontSize: 11,
+    fontWeight: "bold",
+    color: THEME.textSecondary,
+    marginTop: 8,
+    letterSpacing: 1,
+  },
+  paymentButtons: { flexDirection: "row", gap: 8, width: "100%" },
+  payBtn: {
+    paddingVertical: 12,
+    borderRadius: 8,
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  payBtnText: { color: "#fff", fontWeight: "bold", fontSize: 13 },
 });
