@@ -280,24 +280,15 @@ export default function JoinScreen() {
             />
           </View>
         </View>
-        <Text style={styles.welcomeTitle}>Welcome to Ann Sathi!</Text>
-        <Text style={[styles.subtitle, { marginBottom: 32 }]}>
+        <Text style={[styles.welcomeTitle, { textAlign: "center" }]}>
+          Welcome to AnnSathi!
+        </Text>
+        <Text
+          style={[styles.subtitle, { marginBottom: 32, textAlign: "center" }]}
+        >
           Please scan the QR code on your table to view the menu and place your
           order.
         </Text>
-        <TouchableOpacity>
-          <MaterialIcons name="badge" size={24} color="#FFF" />
-          <Text
-            style={{
-              color: "#FFF",
-              fontWeight: "900",
-              fontSize: 16,
-              letterSpacing: 1,
-            }}
-          >
-            Waiter Login
-          </Text>
-        </TouchableOpacity>
       </SafeAreaView>,
     );
   }

@@ -47,4 +47,17 @@ export const OrderService = {
       throw new Error(error.message || "Failed to cancel order");
     }
   },
+  notifyPaymentDone: async (
+    sessionToken: string,
+    orderId: string | number,
+    method: string,
+  ) => {
+    return apiCall(`/orders/${orderId}/notify-payment`, {
+      method: "POST",
+      body: JSON.stringify({
+        session_token: sessionToken,
+        payment_method: method,
+      }),
+    });
+  },
 };

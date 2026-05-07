@@ -41,7 +41,9 @@ export default function TabLayout() {
 
   useEffect(() => {
     const unsubscribe = billTabNotifier.subscribe(setShowBillTab);
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   if (!isReady) {
