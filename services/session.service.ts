@@ -89,4 +89,11 @@ export const SessionService = {
       body: JSON.stringify({ session_token: sessionToken, method }),
     });
   },
+  // Add this inside the exported SessionService object
+  validateSessionToken: async (sessionToken: string) => {
+    return apiCall(`/session/validate`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    });
+  },
 };

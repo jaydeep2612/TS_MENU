@@ -68,6 +68,10 @@ export default function JoinScreen() {
 
   const [loading, setLoading] = useState(false);
   const [validating, setValidating] = useState(true);
+
+  // 👇 NEW: Guard state to pause redirects until server confirms
+  const [isSessionVerified, setIsSessionVerified] = useState(false);
+
   const [isTableFull, setIsTableFull] = useState(false);
   const [isTableReserved, setIsTableReserved] = useState(false);
   const [existingHostName, setExistingHostName] = useState<string | null>(null);
@@ -77,6 +81,49 @@ export default function JoinScreen() {
   const [tableDisplayNumber, setTableDisplayNumber] = useState<string | null>(
     null,
   );
+
+  // ─── 1. VERIFY STORED SESSION ON MOUNT ───
+  useEffect(() => {
+    let isMounted = true;
+
+    const verifyLocalSession = async () => {
+      // GUARD: If we already verified, or if there's no token, stop immediately.
+      if (isSessionVerified || !sessionToken || !tableData) {
+        if (isMounted) setIsSessionVerified(true);
+        return;
+      }
+
+      // Check 1: Physical QR mismatch
+      if (r && t && token) {
+        if (tableData.tId !== t || tableData.token !== token) {
+          await clearSession();
+          if (isMounted) setIsSessionVerified(true);
+          return;
+        }
+      }
+
+      // Check 2: Ping server to see if table was cleaned
+      try {
+        await SessionService.validateSessionToken(sessionToken);
+        // Valid!
+        if (isMounted) setIsSessionVerified(true);
+      } catch (e: any) {
+        // Only clear if the server EXPLICITLY says the session is dead (401, 403, 404).
+        // Ignore 500 errors so we don't wipe valid caches during server hiccups.
+        if (e.status === 401 || e.status === 403 || e.status === 404) {
+          await clearSession();
+        }
+        if (isMounted) setIsSessionVerified(true);
+      }
+    };
+
+    verifyLocalSession();
+
+    return () => {
+      isMounted = false;
+    };
+    // 👇 CRITICAL FIX: Only run this on initial mount, do NOT depend on sessionToken changing
+  }, []);
 
   const initTable = useCallback(async () => {
     if (r && t && token) {
@@ -204,15 +251,18 @@ export default function JoinScreen() {
     };
   }, [joinStatus, sessionToken, tableData]);
 
-  // Handle Customer Redirects
+  // ─── 2. SAFE AUTO-REDIRECT TO MENU ───
   useEffect(() => {
+    // 👇 DO NOT REDIRECT until we know the session is genuinely active on the server
+    if (!isSessionVerified) return;
+
     if (
       sessionToken &&
       (joinStatus === "active" || joinStatus === "approved")
     ) {
       router.replace("/(tabs)/menu");
     }
-  }, [sessionToken, joinStatus]);
+  }, [sessionToken, joinStatus, isSessionVerified]);
 
   const handleJoin = useCallback(async () => {
     if (!customerName.trim()) return;
@@ -246,33 +296,25 @@ export default function JoinScreen() {
     </View>
   );
 
-  if (!rootNavigationState?.key) {
-    return renderWithBackground(
-      <SafeAreaView style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={ANN.orange} />
-      </SafeAreaView>,
-    );
-  }
-
-  if (validating && r && t && token) {
+  // 👇 Show loader while validating physical QR OR checking if old session is still alive
+  if (!rootNavigationState?.key || validating || !isSessionVerified) {
     return renderWithBackground(
       <SafeAreaView style={styles.centerContainer}>
         <ActivityIndicator size="large" color={ANN.orange} />
         <Text
           style={{ marginTop: 16, color: ANN.darkBlue, fontWeight: "bold" }}
         >
-          Checking table status...
+          Connecting to table...
         </Text>
       </SafeAreaView>,
     );
   }
 
-  // 👇 FALLBACK UI (NO QR SCANNED) - UPDATED TO USE IMAGE LOGO 👇
+  // 👇 FALLBACK UI (NO QR SCANNED)
   if (!r || !t || !token) {
     return renderWithBackground(
       <SafeAreaView style={styles.centerContainer}>
         <View style={{ alignItems: "center", marginBottom: 40, marginTop: 40 }}>
-          {/* 🌟 यहाँ आइकॉन हटाकर आपकी असली इमेज लगा दी गई है 🌟 */}
           <View style={styles.logoWrapperBig}>
             <Image
               source={require("../assets/images/ann-sathi.png")}
@@ -544,11 +586,11 @@ const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
     resizeMode: "cover",
-    opacity: 0.15, // Light doodle watermark effect
+    opacity: 0.15,
   },
   bgOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(255, 255, 255, 0.85)", // Glass effect
+    backgroundColor: "rgba(255, 255, 255, 0.85)",
   },
 
   container: { flex: 1, maxWidth: 480, width: "100%", alignSelf: "center" },
@@ -559,7 +601,6 @@ const styles = StyleSheet.create({
     padding: 24,
   },
 
-  // ── STAFF LOGIN FALLBACK (UPDATED WITH LOGO) ──
   logoWrapperBig: {
     width: 120,
     height: 120,
@@ -572,23 +613,7 @@ const styles = StyleSheet.create({
     height: "100%",
     resizeMode: "contain",
   },
-  staffLoginBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    backgroundColor: ANN.darkBlue,
-    paddingVertical: 16,
-    paddingHorizontal: 32,
-    borderRadius: 14,
-    shadowColor: ANN.darkBlue,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-  },
 
-  // ── HEADER ──
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -608,7 +633,6 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: "900", color: ANN.darkBlue },
 
-  // ── CONTENT ──
   content: {
     flex: 1,
     alignItems: "center",
@@ -647,7 +671,6 @@ const styles = StyleSheet.create({
     marginLeft: 6,
   },
 
-  // ── CHOICES (JOIN OR NEW) ──
   choiceCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -670,7 +693,6 @@ const styles = StyleSheet.create({
   },
   choiceDesc: { fontSize: 13, color: ANN.textSecondary, fontWeight: "500" },
 
-  // ── FORM AREA ──
   formArea: { width: "100%" },
   label: {
     fontSize: 14,
@@ -698,7 +720,6 @@ const styles = StyleSheet.create({
     ...((Platform.OS === "web" ? { outlineStyle: "none" } : {}) as any),
   },
 
-  // ── BUTTONS ──
   joinButton: {
     backgroundColor: ANN.orange,
     alignItems: "center",

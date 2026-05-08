@@ -104,6 +104,7 @@ export default function MenuScreen() {
     menuData?.session_id ||
     tableData?.tId;
 
+  // ─── 1. FETCH MENU & HANDLE AUTH ERRORS ───
   useEffect(() => {
     const loadMenu = async () => {
       if (!tableData || !sessionToken) return;
@@ -120,7 +121,27 @@ export default function MenuScreen() {
         } else {
           setMenuData({ categories: FALLBACK_CATEGORIES });
         }
-      } catch (e) {
+      } catch (e: any) {
+        // 👇 CRITICAL FIX: Distinguish between Auth Errors and Network Errors
+        if (e.status === 401 || e.status === 403 || e.status === 404) {
+          await clearSession();
+
+          if (Platform.OS === "web") {
+            window.alert(
+              "Session Expired. Please scan the table QR code again.",
+            );
+          } else {
+            Alert.alert(
+              "Session Expired",
+              "Please scan the table QR code again.",
+            );
+          }
+
+          router.replace("/");
+          return; // Instantly abort, DO NOT set the fallback menu
+        }
+
+        // It's a genuine network failure, so we load the fallback
         setMenuData({ categories: FALLBACK_CATEGORIES });
       } finally {
         setLoadingMenu(false);
@@ -129,6 +150,7 @@ export default function MenuScreen() {
     loadMenu();
   }, [tableData, sessionToken]);
 
+  // ─── 2. REALTIME HOST LISTENERS ───
   useEffect(() => {
     let isMounted = true;
     const setupHostListener = async () => {
@@ -340,7 +362,6 @@ export default function MenuScreen() {
     const currentQty = cart[item.id]?.qty || 0;
     const itemPrice = parseFloat(item.price) || 0;
 
-    // Fixed the ternary condition here as well
     const safeType = item.type
       ? String(item.type).toLowerCase()
       : item.is_veg === false

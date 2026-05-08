@@ -197,23 +197,14 @@ export const SessionProvider = ({
 
   const clearSession = async () => {
     try {
+      // 1. Tell backend we are leaving
       if (sessionToken) {
         await SessionService.leaveSession(sessionToken);
       }
     } catch (e) {
       console.error("Failed to notify server of leave", e);
     } finally {
-      await AsyncStorage.multiRemove([
-        "sessionToken",
-        "customerName",
-        "cart",
-        "isPrimary",
-        "joinStatus",
-        "tableData",
-        "orders", // 🔥 Ensure orders clear when they leave the table
-      ]);
-
-      // Reset all state to completely blank
+      // 2. Reset all React state to completely blank instantly (Added setMenuData)
       setSessionToken(null);
       setCustomerName("");
       setCart({});
@@ -221,6 +212,18 @@ export const SessionProvider = ({
       setJoinStatus(null);
       setOrders([]);
       setTableData(null);
+      setMenuData(null); // 🔥 Prevents UI flickering of old menus
+
+      // 3. Wipe Persistent Storage completely
+      await AsyncStorage.multiRemove([
+        "sessionToken",
+        "customerName",
+        "cart",
+        "isPrimary",
+        "joinStatus",
+        "tableData",
+        "orders",
+      ]);
     }
   };
 
