@@ -22,9 +22,8 @@ import { initEcho } from "../../services/echo";
 import { SessionService } from "../../services/session.service";
 
 const { width } = Dimensions.get("window");
-const CARD_WIDTH = width > 480 ? 200 : width * 0.45; // Responsive card width
+const CARD_WIDTH = width > 480 ? 200 : width * 0.45;
 
-// ─── Ann Sathi Brand Colors ───────────────────────────────────────────────────
 const ANN = {
   orange: "#fe9a54",
   red: "#f16b3f",
@@ -35,28 +34,25 @@ const ANN = {
   blueLight: "#eef2fb",
   darkBlueLight: "#e8ecf7",
 };
-// ─────────────────────────────────────────────────────────────────────────────
 
 const DUMMY_MENU = [
   {
     id: 1,
     name: "Truffle Burger",
     price: 22.5,
-    desc: "Wagyu beef, truffle aioli, caramelized onions, Gruyère cheese, brioche bun.",
+    desc: "Wagyu beef...",
     is_popular: true,
     type: "non-veg",
-    image_path:
-      "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?q=80&w=300&auto=format&fit=crop",
+    image_path: "https://via.placeholder.com/150",
   },
   {
     id: 2,
     name: "Basil Pesto Pasta",
     price: 18.9,
-    desc: "Handmade linguine, house-made basil pesto, toasted pine nuts, parmesan.",
+    desc: "Handmade...",
     is_popular: false,
     type: "veg",
-    image_path:
-      "https://images.unsplash.com/photo-1473093295043-cdd812d0e601?q=80&w=300&auto=format&fit=crop",
+    image_path: "https://via.placeholder.com/150",
   },
 ];
 
@@ -83,6 +79,8 @@ export default function MenuScreen() {
     clearSession,
   } = useSession();
 
+  const isRoom = tableData?.type === "room";
+
   const [activeCategoryId, setActiveCategoryId] = useState<string | number>(
     "all",
   );
@@ -104,7 +102,6 @@ export default function MenuScreen() {
     menuData?.session_id ||
     tableData?.tId;
 
-  // ─── 1. FETCH MENU & HANDLE AUTH ERRORS ───
   useEffect(() => {
     const loadMenu = async () => {
       if (!tableData || !sessionToken) return;
@@ -115,6 +112,7 @@ export default function MenuScreen() {
           tableData.tId,
           tableData.token,
           sessionToken,
+          tableData.type,
         );
         if (data && data.categories) {
           setMenuData(data);
@@ -122,35 +120,25 @@ export default function MenuScreen() {
           setMenuData({ categories: FALLBACK_CATEGORIES });
         }
       } catch (e: any) {
-        // 👇 CRITICAL FIX: Distinguish between Auth Errors and Network Errors
         if (e.status === 401 || e.status === 403 || e.status === 404) {
           await clearSession();
-
+          const errorMsg = `Session Expired. Please scan the ${isRoom ? "room" : "table"} QR code again.`;
           if (Platform.OS === "web") {
-            window.alert(
-              "Session Expired. Please scan the table QR code again.",
-            );
+            window.alert(errorMsg);
           } else {
-            Alert.alert(
-              "Session Expired",
-              "Please scan the table QR code again.",
-            );
+            Alert.alert("Session Expired", errorMsg);
           }
-
           router.replace("/");
-          return; // Instantly abort, DO NOT set the fallback menu
+          return;
         }
-
-        // It's a genuine network failure, so we load the fallback
         setMenuData({ categories: FALLBACK_CATEGORIES });
       } finally {
         setLoadingMenu(false);
       }
     };
     loadMenu();
-  }, [tableData, sessionToken]);
+  }, [tableData, sessionToken, isRoom]);
 
-  // ─── 2. REALTIME HOST LISTENERS ───
   useEffect(() => {
     let isMounted = true;
     const setupHostListener = async () => {
@@ -168,14 +156,9 @@ export default function MenuScreen() {
             setShowRequestsModal(true);
           }
         }
-      } catch (e) {
-        console.error("Failed to fetch host data", e);
-      }
+      } catch (e) {}
 
-      if (!echoRef.current) {
-        echoRef.current = initEcho(sessionToken);
-      }
-
+      if (!echoRef.current) echoRef.current = initEcho(sessionToken);
       const channel = echoRef.current.private(`session.${currentSessionId}`);
 
       channel.listen(".GuestJoinRequested", (event: any) => {
@@ -196,15 +179,13 @@ export default function MenuScreen() {
         if (!isMounted) return;
         Alert.alert(
           "Thank You!",
-          "Your table session has been closed by the restaurant. We hope to see you again soon!",
+          `Your ${isRoom ? "room" : "table"} session has been closed. We hope to see you again soon!`,
         );
         await clearSession();
         router.replace("/");
       });
     };
-
     setupHostListener();
-
     return () => {
       isMounted = false;
       if (echoRef.current && currentSessionId) {
@@ -214,7 +195,7 @@ export default function MenuScreen() {
         echoRef.current.leave(`session.${currentSessionId}`);
       }
     };
-  }, [isPrimary, tableData?.tId, sessionToken, currentSessionId]);
+  }, [isPrimary, tableData?.tId, sessionToken, currentSessionId, isRoom]);
 
   const handleRequestResponse = async (
     id: number,
@@ -229,25 +210,22 @@ export default function MenuScreen() {
         if (updated.length === 0) setShowRequestsModal(false);
         return updated;
       });
-      if (action === "approve" && guestToMove) {
+      if (action === "approve" && guestToMove)
         setActiveGuests((prev) => [...prev, guestToMove]);
-      }
     } catch (e) {
       Alert.alert("Error", "Could not process the request. Please try again.");
     }
   };
 
   const handleLeaveTable = () => {
+    const msg = `Are you sure you want to disconnect from this ${isRoom ? "room" : "table"}?`;
     if (Platform.OS === "web") {
-      const confirmed = window.confirm(
-        "Are you sure you want to disconnect from this table?",
-      );
-      if (confirmed) clearSession().then(() => router.replace("/"));
+      if (window.confirm(msg)) clearSession().then(() => router.replace("/"));
       return;
     }
     Alert.alert(
-      "Leave Table?",
-      "Are you sure you want to disconnect from this table? Your cart and session will be cleared.",
+      `Leave ${isRoom ? "Room" : "Table"}?`,
+      `${msg} Your cart and session will be cleared.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -282,7 +260,6 @@ export default function MenuScreen() {
 
   const categories = menuData?.categories || FALLBACK_CATEGORIES;
 
-  // 👇 NEW: Check if there are ANY non-veg items in the entire menu
   const hasNonVegItems = useMemo(() => {
     return categories.some((cat: any) => {
       if (!cat.items) return false;
@@ -302,18 +279,14 @@ export default function MenuScreen() {
     return categories
       .map((cat: any) => {
         if (cat.is_active === false || cat.is_active === 0) return null;
-
         const filteredItems = (cat.items || []).filter((item: any) => {
           if (item.is_available === false || item.is_available === 0)
             return false;
-
-          // Fixed the ternary condition here
           const safeType = item.type
             ? String(item.type).toLowerCase()
             : item.is_veg === false
               ? "non-veg"
               : "veg";
-
           if (dietaryFilter !== "all" && safeType !== dietaryFilter)
             return false;
           if (query) {
@@ -325,14 +298,10 @@ export default function MenuScreen() {
           }
           return true;
         });
-
-        // Add sorting: lowest price to highest price
-        filteredItems.sort((a: any, b: any) => {
-          const priceA = parseFloat(a.price) || 0;
-          const priceB = parseFloat(b.price) || 0;
-          return priceA - priceB;
-        });
-
+        filteredItems.sort(
+          (a: any, b: any) =>
+            (parseFloat(a.price) || 0) - (parseFloat(b.price) || 0),
+        );
         return { ...cat, items: filteredItems };
       })
       .filter((cat: any) => cat && cat.items.length > 0);
@@ -348,7 +317,6 @@ export default function MenuScreen() {
     ? customerName
     : menuData?.session?.host_name || "Host";
 
-  // 👇 LOGIC FOR NEXT CATEGORY BUTTON 👇
   const currentCatIndex = processedCategories.findIndex(
     (c: any) => c.id === activeCategoryId,
   );
@@ -357,11 +325,9 @@ export default function MenuScreen() {
       ? processedCategories[currentCatIndex + 1]
       : null;
 
-  // ─── CARD RENDERER (Supports Horizontal & Grid) ────────────────────────────
   const renderMenuItemCard = (item: any, isGrid: boolean = false) => {
     const currentQty = cart[item.id]?.qty || 0;
     const itemPrice = parseFloat(item.price) || 0;
-
     const safeType = item.type
       ? String(item.type).toLowerCase()
       : item.is_veg === false
@@ -373,7 +339,7 @@ export default function MenuScreen() {
         key={`item-${item.id}`}
         style={[
           styles.sliderCard,
-          isGrid && styles.gridCard, // Apply grid width if isGrid is true
+          isGrid && styles.gridCard,
           isOrderingLocked && { opacity: 0.6 },
         ]}
       >
@@ -400,15 +366,12 @@ export default function MenuScreen() {
               <Text style={styles.sliderItemName} numberOfLines={1}>
                 {item.name}
               </Text>
-
-              {/* Veg/Non-Veg Icon */}
               {safeType === "veg" ? (
                 <View style={styles.vegDotSmall} />
               ) : (
                 <View style={styles.nonVegTriangleSmall} />
               )}
             </View>
-
             <Text style={styles.sliderItemDesc} numberOfLines={2}>
               {item.description || item.desc}
             </Text>
@@ -416,7 +379,6 @@ export default function MenuScreen() {
 
           <View style={styles.sliderFooter}>
             <Text style={styles.sliderPrice}>₹{itemPrice.toFixed(2)}</Text>
-
             {!isOrderingLocked &&
               (currentQty > 0 ? (
                 <View style={styles.sliderQtyControls}>
@@ -453,21 +415,16 @@ export default function MenuScreen() {
       </View>
     );
   };
-  // ─────────────────────────────────────────────────────────────────────────────
 
   return (
-    // ─── MAIN WRAPPER FOR DOODLE BACKGROUND EFFECT ───
     <View style={styles.mainWrapper}>
-      {/* Background Image (Updated to standard Doodle pattern) */}
       <Image
-        source={require("../../assets/images/bg.png")} // Used generic bg.png for doodle pattern
+        source={require("../../assets/images/bg.png")}
         style={styles.bgImage}
       />
-      {/* Semi-transparent Overlay to ensure readability */}
       <View style={styles.bgOverlay} />
 
       <SafeAreaView style={styles.container}>
-        {/* ── TOP BAR ── */}
         <View style={styles.topBar}>
           <TouchableOpacity style={styles.iconBtn} onPress={handleLeaveTable}>
             <MaterialIcons name="exit-to-app" size={26} color={THEME.danger} />
@@ -495,7 +452,7 @@ export default function MenuScreen() {
                 />
               )}
               <Text style={styles.topBarTitle}>
-                Table {tableNumber} • {restaurantName}
+                {isRoom ? "Room" : "Table"} {tableNumber} • {restaurantName}
               </Text>
             </View>
 
@@ -564,7 +521,6 @@ export default function MenuScreen() {
             contentContainerStyle={styles.scrollContent}
             keyboardShouldPersistTaps="handled"
           >
-            {/* ── Banner ── */}
             <View
               style={[styles.banner, isOrderingLocked && styles.bannerLocked]}
             >
@@ -594,7 +550,6 @@ export default function MenuScreen() {
               </View>
             </View>
 
-            {/* ── Search ── */}
             <View style={styles.searchContainer}>
               <MaterialIcons
                 name="search"
@@ -620,7 +575,6 @@ export default function MenuScreen() {
               )}
             </View>
 
-            {/* ── Dietary Filter (Conditionally Rendered) ── */}
             {hasNonVegItems && (
               <View style={styles.dietaryFilterContainer}>
                 <TouchableOpacity
@@ -680,7 +634,6 @@ export default function MenuScreen() {
               </View>
             )}
 
-            {/* ── CATEGORY SLIDER (PILLS) ORANGE/BLUE ── */}
             {searchQuery.trim().length === 0 && (
               <View style={styles.categorySliderContainer}>
                 <ScrollView
@@ -733,14 +686,12 @@ export default function MenuScreen() {
               </View>
             )}
 
-            {/* ── MENU SECTIONS (ALL = X-SCROLL | SUB = Y-SCROLL 2x2 GRID) ── */}
             <View style={styles.menuSection}>
               {processedCategories.length === 0 ? (
                 <Text style={styles.emptySearchText}>
                   No items match your criteria.
                 </Text>
               ) : activeCategoryId === "all" ? (
-                // ── ALL CATEGORIES (HORIZONTAL SLIDER) ──
                 processedCategories.map((cat: any) => (
                   <View
                     key={`section-${cat.id}`}
@@ -768,7 +719,6 @@ export default function MenuScreen() {
                         renderMenuItemCard(item, false),
                       )}
 
-                      {/* 👇 View All Card at the end of Horizontal List 👇 */}
                       <TouchableOpacity
                         style={styles.viewMoreCard}
                         onPress={() => setActiveCategoryId(cat.id)}
@@ -787,7 +737,6 @@ export default function MenuScreen() {
                   </View>
                 ))
               ) : (
-                // ── SPECIFIC CATEGORY (2x2 GRID) ──
                 processedCategories
                   .filter((c: any) => c.id === activeCategoryId)
                   .map((cat: any) => (
@@ -807,7 +756,6 @@ export default function MenuScreen() {
                         )}
                       </View>
 
-                      {/* 👇 Next Category Button at the bottom of Grid 👇 */}
                       {nextCategory && (
                         <TouchableOpacity
                           style={styles.nextCategoryBtn}
@@ -830,7 +778,6 @@ export default function MenuScreen() {
           </ScrollView>
         )}
 
-        {/* ── Cart Bar ── */}
         {cartTotalQty > 0 && !isOrderingLocked && (
           <View style={styles.cartBar}>
             <TouchableOpacity
@@ -862,7 +809,6 @@ export default function MenuScreen() {
           </View>
         )}
 
-        {/* ── Requests Modal ── */}
         <Modal visible={showRequestsModal} transparent animationType="slide">
           <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>
@@ -1004,30 +950,19 @@ export default function MenuScreen() {
 }
 
 const styles = StyleSheet.create({
-  // ── BACKGROUND STYLES ──
-  mainWrapper: {
-    flex: 1,
-    backgroundColor: THEME.background,
-  },
+  mainWrapper: { flex: 1, backgroundColor: THEME.background },
   bgImage: {
     ...StyleSheet.absoluteFillObject,
     width: "100%",
     height: "100%",
     resizeMode: "cover",
-    opacity: 0.15, // Light doodle watermark effect
+    opacity: 0.15,
   },
   bgOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(255, 255, 255, 0.85)", // Glass effect opacity
+    backgroundColor: "rgba(255, 255, 255, 0.85)",
   },
-  container: {
-    flex: 1,
-    maxWidth: 480,
-    width: "100%",
-    alignSelf: "center",
-  },
-
-  // ── HEADER & TOP BAR ──
+  container: { flex: 1, maxWidth: 480, width: "100%", alignSelf: "center" },
   headerCenter: {
     flex: 1,
     alignItems: "center",
@@ -1086,8 +1021,6 @@ const styles = StyleSheet.create({
   },
   hostBadgeText: { color: "#FFF", fontWeight: "bold", fontSize: 14 },
   scrollContent: { paddingBottom: 100 },
-
-  // ── BANNERS & SEARCH ──
   banner: {
     flexDirection: "row",
     alignItems: "center",
@@ -1132,8 +1065,6 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     paddingHorizontal: 16,
   },
-
-  // ── DIETARY FILTER ──
   dietaryFilterContainer: {
     flexDirection: "row",
     marginHorizontal: 16,
@@ -1170,32 +1101,19 @@ const styles = StyleSheet.create({
   dietFilterTextActive: { color: "#FFF" },
   dietFilterTextActiveVeg: { color: "#047857" },
   dietFilterTextActiveNonVeg: { color: "#b91c1c" },
-
-  // ── CATEGORY PILLS (ORANGE/BLUE COMBO) ──
   categorySliderContainer: { marginBottom: 16 },
   categorySliderContent: { paddingHorizontal: 16, gap: 10 },
   catPill: {
-    backgroundColor: "rgba(238, 242, 251, 0.8)", // Light Blue Glass
+    backgroundColor: "rgba(238, 242, 251, 0.8)",
     paddingHorizontal: 18,
     paddingVertical: 10,
     borderRadius: 24,
     borderWidth: 1,
     borderColor: "rgba(42, 71, 149, 0.2)",
   },
-  catPillActive: {
-    backgroundColor: ANN.orange,
-    borderColor: ANN.orange,
-  },
-  catPillText: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: ANN.darkBlue, // Blue Text
-  },
-  catPillTextActive: {
-    color: "#ffffff", // White text when active
-  },
-
-  // ── MENU ITEM SLIDER CARDS (HORIZONTAL X-SCROLL) ──
+  catPillActive: { backgroundColor: ANN.orange, borderColor: ANN.orange },
+  catPillText: { fontSize: 14, fontWeight: "700", color: ANN.darkBlue },
+  catPillTextActive: { color: "#ffffff" },
   menuSection: { paddingBottom: 20 },
   categorySectionBlock: { marginBottom: 24 },
   categorySectionHeader: {
@@ -1211,25 +1129,19 @@ const styles = StyleSheet.create({
     color: THEME.textPrimary,
   },
   sliderContentContainer: { paddingHorizontal: 16, gap: 16 },
-
-  // ── NEW: 2x2 GRID (VERTICAL Y-SCROLL) ──
   gridContentContainer: {
     flexDirection: "row",
     flexWrap: "wrap",
     justifyContent: "space-between",
     paddingHorizontal: 16,
   },
-  gridCard: {
-    width: "48%", // Forces 2 cards per row
-    marginBottom: 16,
-  },
-
+  gridCard: { width: "48%", marginBottom: 16 },
   sliderCard: {
     width: CARD_WIDTH,
-    backgroundColor: "rgba(255, 255, 255, 0.75)", // Glass effect background
+    backgroundColor: "rgba(255, 255, 255, 0.75)",
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "rgba(42, 71, 149, 0.15)", // Subtle Blue Border
+    borderColor: "rgba(42, 71, 149, 0.15)",
     overflow: "hidden",
     ...Platform.select({
       web: { boxShadow: "0px 4px 12px rgba(0,0,0,0.06)" } as any,
@@ -1271,11 +1183,10 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     marginBottom: 4,
   },
-
   sliderItemName: {
     fontSize: 15,
     fontWeight: "bold",
-    color: ANN.darkBlue, // Blue Title
+    color: ANN.darkBlue,
     flex: 1,
     marginRight: 6,
   },
@@ -1291,15 +1202,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 8,
   },
-
-  sliderPrice: {
-    fontSize: 16,
-    fontWeight: "900",
-    color: ANN.red, // Orange/Red Price
-  },
-
+  sliderPrice: { fontSize: 16, fontWeight: "900", color: ANN.red },
   sliderAddBtn: {
-    backgroundColor: ANN.orange, // Orange Button
+    backgroundColor: ANN.orange,
     width: 32,
     height: 32,
     borderRadius: 10,
@@ -1330,8 +1235,6 @@ const styles = StyleSheet.create({
     width: 20,
     textAlign: "center",
   },
-
-  // ── "View All" Card at end of Horizontal Scroll ──
   viewMoreCard: {
     width: CARD_WIDTH * 0.6,
     backgroundColor: "rgba(238, 242, 251, 0.8)",
@@ -1366,8 +1269,6 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 4,
   },
-
-  // ── "Next Category" Button at end of Vertical Grid ──
   nextCategoryBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -1382,13 +1283,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: ANN.blue + "40",
   },
-  nextCategoryBtnText: {
-    color: ANN.blue,
-    fontWeight: "bold",
-    fontSize: 16,
-  },
-
-  // ── Veg / Non Veg Indicators ──
+  nextCategoryBtnText: { color: ANN.blue, fontWeight: "bold", fontSize: 16 },
   vegDotSmall: {
     width: 8,
     height: 8,
@@ -1422,11 +1317,9 @@ const styles = StyleSheet.create({
     borderRightColor: "transparent",
     borderBottomColor: "#ef4444",
   },
-
-  // ── Cart & Modals ──
   cartBar: { position: "absolute", bottom: 16, left: 16, right: 16 },
   cartButton: {
-    backgroundColor: "rgba(42, 71, 149, 0.95)", // Glassy Blue
+    backgroundColor: "rgba(42, 71, 149, 0.95)",
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",

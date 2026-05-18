@@ -1,8 +1,12 @@
-import { apiCall } from "./api"; // 🔥 FIX: Import authHeaders
+import { apiCall } from "./api";
 
 export const SessionService = {
   validateTable: async (rId: string, tId: string, token: string) => {
     return apiCall(`/qr/validate/${rId}/${tId}/${token}`);
+  },
+
+  validateRoom: async (rId: string, roomId: string, token: string) => {
+    return apiCall(`/room/validate/${rId}/${roomId}/${token}`);
   },
 
   startSession: async (
@@ -18,32 +22,37 @@ export const SessionService = {
     });
   },
 
+  // 👇 ADDED TYPE PARAMETER 👇
   fetchMenu: async (
     rId: string,
     tId: string,
     token: string,
     sessionToken: string,
+    type: string = "table",
   ) => {
     return apiCall(
-      `/menu/${rId}/${tId}/${token}?session_token=${sessionToken}`,
+      `/menu/${rId}/${tId}/${token}?session_token=${sessionToken}&type=${type}`,
     );
   },
 
+  // 👇 ADDED TYPE PARAMETER 👇
   checkSessionStatus: async (
     rId: string,
     tId: string,
     token: string,
     sessionToken: string,
+    type: string = "table",
   ) => {
     return apiCall(
-      `/menu/${rId}/${tId}/${token}?session_token=${sessionToken}`,
+      `/menu/${rId}/${tId}/${token}?session_token=${sessionToken}&type=${type}`,
     );
   },
 
-  leaveSession: async (sessionToken: string) => {
+  // 👇 ADDED TYPE TO BODY 👇
+  leaveSession: async (sessionToken: string, type: string = "table") => {
     return apiCall(`/qr/session/leave`, {
       method: "POST",
-      body: JSON.stringify({ session_token: sessionToken }),
+      body: JSON.stringify({ session_token: sessionToken, type }),
     });
   },
 
@@ -64,22 +73,22 @@ export const SessionService = {
     });
   },
 
-  // 🔥 NEW & CRITICAL: Added the missing callWaiter method!
-  callWaiter: async (sessionToken: string) => {
+  // 👇 ADDED TYPE TO BODY 👇
+  callWaiter: async (sessionToken: string, type: string = "table") => {
     return apiCall(`/session/call-waiter`, {
       method: "POST",
-      // 👇 FIX: Send token in the body instead of relying on headers
-      body: JSON.stringify({ session_token: sessionToken }),
+      body: JSON.stringify({ session_token: sessionToken, type }),
     });
   },
-  requestBill: async (sessionToken: string) => {
+
+  // 👇 ADDED TYPE TO BODY 👇
+  requestBill: async (sessionToken: string, type: string = "table") => {
     return apiCall(`/session/request-bill`, {
       method: "POST",
-      body: JSON.stringify({ session_token: sessionToken }),
+      body: JSON.stringify({ session_token: sessionToken, type }),
     });
   },
-  // Add this inside SessionService
-  // 👇 Update the signature to accept "pending"
+
   selectPaymentMethod: async (
     sessionToken: string,
     method: "cash" | "upi" | "pending",
@@ -89,7 +98,7 @@ export const SessionService = {
       body: JSON.stringify({ session_token: sessionToken, method }),
     });
   },
-  // Add this inside the exported SessionService object
+
   validateSessionToken: async (sessionToken: string) => {
     return apiCall(`/session/validate`, {
       method: "GET",

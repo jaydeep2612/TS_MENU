@@ -52,7 +52,12 @@ export default function BillsTab() {
     customerName,
     clearSession,
   } = useSession();
-  const { billRequested } = useLocalSearchParams();
+
+  // 👇 Extract type parameter from the URL context
+  const { billRequested } = useLocalSearchParams<{ billRequested?: string }>();
+
+  // 👇 FIX: Extract type directly from the globally persisted tableData context
+  const isRoom = tableData?.type === "room";
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -100,7 +105,11 @@ export default function BillsTab() {
     async (signal?: AbortSignal) => {
       if (!sessionToken) return;
       try {
-        const data = await OrderService.getOrders(sessionToken, signal);
+        const data = await OrderService.getOrders(
+          sessionToken,
+          tableData?.type || "table",
+          signal,
+        );
         const incomingOrders = Array.isArray(data) ? data : data.orders || [];
         mergeOrders(incomingOrders);
         if (data.payment) setPaymentData(data.payment);
@@ -178,7 +187,7 @@ export default function BillsTab() {
         if (!isMounted) return;
         Alert.alert(
           "Thank You!",
-          "Your table session has been closed. See you again!",
+          `Your ${isRoom ? "room" : "table"} session has been closed. See you again!`, // 👇 Dynamic alert text
         );
         await clearSession();
         router.replace("/");
@@ -195,7 +204,7 @@ export default function BillsTab() {
         echoRef.current = null;
       }
     };
-  }, [sessionToken, sessionId, fetchOrders]);
+  }, [sessionToken, sessionId, fetchOrders, isRoom]);
 
   const validOrders = useMemo(() => {
     return Array.isArray(orders)
@@ -271,13 +280,11 @@ export default function BillsTab() {
     };
   }, [validOrders]);
 
-  // 👇 UI CALCULATIONS - Using exact PaymentData values for the breakdown 👇
   const finalSubtotal = parseFloat(paymentData?.subtotal || rawSubtotal || 0);
   const finalDiscount = parseFloat(paymentData?.discount_amount || 0);
   const finalTax = parseFloat(paymentData?.tax_amount || 0);
   const finalExtraCharges = parseFloat(paymentData?.extra_charges || 0);
 
-  // Use pure math so React state doesn't desync with the UI
   const calculatedGrandTotal =
     finalSubtotal - finalDiscount + finalTax + finalExtraCharges;
 
@@ -296,7 +303,12 @@ export default function BillsTab() {
 
   const pa = encodeURIComponent(upiId);
   const pn = encodeURIComponent(restaurantName);
-  const tn = encodeURIComponent(`Bill for Table ${tableNum}`);
+
+  // 👇 Dynamic UPI Reference string based on Room vs Table
+  const tn = encodeURIComponent(
+    `Bill for ${isRoom ? "Room" : "Table"} ${tableNum}`,
+  );
+
   const tr = encodeURIComponent(
     paymentData?.transaction_reference || `TXN${Date.now()}`,
   );
@@ -357,7 +369,8 @@ export default function BillsTab() {
         </div>
 
         <div style="background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px;">
-          <div style="text-align: center; font-size: 22px; font-weight: 900; margin-bottom: 4px;">TABLE ${tableNum}</div>
+          
+          <div style="text-align: center; font-size: 22px; font-weight: 900; margin-bottom: 4px;">${isRoom ? "ROOM" : "TABLE"} ${tableNum}</div>
           <div style="text-align: center; font-size: 10px; font-weight: 700; color: #6b7280; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 24px;">FINAL BILLING SUMMARY</div>
 
           <div style="background-color: #f3f4f6; padding: 10px 14px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; font-size: 14px; font-weight: 700; margin-bottom: 24px;">
@@ -442,7 +455,8 @@ export default function BillsTab() {
         const generateWebPDF = () => {
           const opt = {
             margin: 0.5,
-            filename: `Bill_Table_${tableNum}.pdf`,
+            // 👇 Dynamic PDF Download Filename
+            filename: `Bill_${isRoom ? "Room" : "Table"}_${tableNum}.pdf`,
             image: { type: "jpeg", quality: 0.98 },
             html2canvas: { scale: 2 },
             jsPDF: { unit: "in", format: "letter", orientation: "portrait" },
@@ -518,7 +532,6 @@ export default function BillsTab() {
             />
           }
         >
-          {/* 👇 FIX: Show empty state if paymentData is missing entirely */}
           {loading && !paymentData && !billingSummary ? (
             <View style={styles.emptyState}>
               <ActivityIndicator size="large" color={ANN.orange} />
@@ -567,7 +580,10 @@ export default function BillsTab() {
               <View style={styles.card}>
                 <View style={styles.cardHeader}>
                   <Text style={styles.cardTitle}>Order Items</Text>
-                  <Text style={styles.tableBadge}>Table #{tableNum}</Text>
+                  {/* 👇 Dynamic Table/Room Label */}
+                  <Text style={styles.tableBadge}>
+                    {isRoom ? "Room" : "Table"} #{tableNum}
+                  </Text>
                 </View>
 
                 <View style={styles.tableHeader}>

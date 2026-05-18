@@ -58,18 +58,19 @@ export default function JoinScreen() {
     joinStatus,
     setJoinStatus,
     clearSession,
+    activateRoomSession,
   } = useSession();
 
-  const { r, t, token } = useLocalSearchParams<{
+  const { r, t, token, type } = useLocalSearchParams<{
     r: string;
     t: string;
     token: string;
+    type?: string;
   }>();
 
   const [loading, setLoading] = useState(false);
   const [validating, setValidating] = useState(true);
 
-  // 👇 NEW: Guard state to pause redirects until server confirms
   const [isSessionVerified, setIsSessionVerified] = useState(false);
 
   const [isTableFull, setIsTableFull] = useState(false);
@@ -87,13 +88,11 @@ export default function JoinScreen() {
     let isMounted = true;
 
     const verifyLocalSession = async () => {
-      // GUARD: If we already verified, or if there's no token, stop immediately.
       if (isSessionVerified || !sessionToken || !tableData) {
         if (isMounted) setIsSessionVerified(true);
         return;
       }
 
-      // Check 1: Physical QR mismatch
       if (r && t && token) {
         if (tableData.tId !== t || tableData.token !== token) {
           await clearSession();
@@ -102,14 +101,10 @@ export default function JoinScreen() {
         }
       }
 
-      // Check 2: Ping server to see if table was cleaned
       try {
         await SessionService.validateSessionToken(sessionToken);
-        // Valid!
         if (isMounted) setIsSessionVerified(true);
       } catch (e: any) {
-        // Only clear if the server EXPLICITLY says the session is dead (401, 403, 404).
-        // Ignore 500 errors so we don't wipe valid caches during server hiccups.
         if (e.status === 401 || e.status === 403 || e.status === 404) {
           await clearSession();
         }
@@ -122,7 +117,6 @@ export default function JoinScreen() {
     return () => {
       isMounted = false;
     };
-    // 👇 CRITICAL FIX: Only run this on initial mount, do NOT depend on sessionToken changing
   }, []);
 
   const initTable = useCallback(async () => {
@@ -131,6 +125,17 @@ export default function JoinScreen() {
         setTableData({ rId: r, tId: t, token });
       }
       try {
+        // 👇 CHECK: If this is a Room QR, validate and fast-track login
+        if (type === "room") {
+          const roomData = await SessionService.validateRoom(r, t, token);
+
+          if (roomData.is_room && roomData.session_token) {
+            await activateRoomSession(roomData, r, t, token);
+            return;
+          }
+        }
+
+        // 👇 FALLBACK: Standard Restaurant Table Logic
         const data = await SessionService.validateTable(r, t, token);
 
         if (data.table_number) {
@@ -162,6 +167,13 @@ export default function JoinScreen() {
           e.name === "AbortError" || e.message?.toLowerCase().includes("abort");
         if (!isAbort) {
           console.error("Validation failed", e);
+
+          if (type === "room" && e.status === 403) {
+            Alert.alert(
+              "Room Inactive",
+              "This room is not currently checked in.",
+            );
+          }
         }
       } finally {
         setValidating(false);
@@ -169,7 +181,7 @@ export default function JoinScreen() {
     } else {
       setValidating(false);
     }
-  }, [r, t, token, tableData, setTableData]);
+  }, [r, t, token, type, tableData, setTableData, activateRoomSession]);
 
   useEffect(() => {
     initTable();
@@ -253,7 +265,6 @@ export default function JoinScreen() {
 
   // ─── 2. SAFE AUTO-REDIRECT TO MENU ───
   useEffect(() => {
-    // 👇 DO NOT REDIRECT until we know the session is genuinely active on the server
     if (!isSessionVerified) return;
 
     if (
@@ -284,7 +295,6 @@ export default function JoinScreen() {
     }
   }, [customerName, selectedMode, startSession]);
 
-  // ─── REUSABLE BACKGROUND WRAPPER ───
   const renderWithBackground = (content: React.ReactNode) => (
     <View style={styles.mainWrapper}>
       <Image
@@ -296,7 +306,6 @@ export default function JoinScreen() {
     </View>
   );
 
-  // 👇 Show loader while validating physical QR OR checking if old session is still alive
   if (!rootNavigationState?.key || validating || !isSessionVerified) {
     return renderWithBackground(
       <SafeAreaView style={styles.centerContainer}>
@@ -304,13 +313,12 @@ export default function JoinScreen() {
         <Text
           style={{ marginTop: 16, color: ANN.darkBlue, fontWeight: "bold" }}
         >
-          Connecting to table...
+          Connecting...
         </Text>
       </SafeAreaView>,
     );
   }
 
-  // 👇 FALLBACK UI (NO QR SCANNED)
   if (!r || !t || !token) {
     return renderWithBackground(
       <SafeAreaView style={styles.centerContainer}>
@@ -425,7 +433,6 @@ export default function JoinScreen() {
 
   const isButtonDisabled = !customerName.trim() || loading;
 
-  // 👇 MAIN JOIN FORM UI 👇
   return renderWithBackground(
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -442,9 +449,7 @@ export default function JoinScreen() {
         <View style={styles.tableBadge}>
           <MaterialIcons name="local-activity" size={18} color={ANN.red} />
           <Text style={styles.tableBadgeText}>
-            {tableDisplayNumber
-              ? `Table ${tableDisplayNumber}`
-              : `Table #${tableData?.tId || "?"}`}
+            Table {tableDisplayNumber || tableData?.tId || "?"}
           </Text>
         </View>
 
@@ -576,11 +581,7 @@ export default function JoinScreen() {
 }
 
 const styles = StyleSheet.create({
-  // ── BACKGROUND STYLES ──
-  mainWrapper: {
-    flex: 1,
-    backgroundColor: "#ffffff",
-  },
+  mainWrapper: { flex: 1, backgroundColor: "#ffffff" },
   bgImage: {
     ...StyleSheet.absoluteFillObject,
     width: "100%",
@@ -592,7 +593,6 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(255, 255, 255, 0.85)",
   },
-
   container: { flex: 1, maxWidth: 480, width: "100%", alignSelf: "center" },
   centerContainer: {
     flex: 1,
@@ -600,7 +600,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     padding: 24,
   },
-
   logoWrapperBig: {
     width: 120,
     height: 120,
@@ -608,12 +607,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 16,
   },
-  logoImageBig: {
-    width: "100%",
-    height: "100%",
-    resizeMode: "contain",
-  },
-
+  logoImageBig: { width: "100%", height: "100%", resizeMode: "contain" },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -632,7 +626,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   headerTitle: { fontSize: 18, fontWeight: "900", color: ANN.darkBlue },
-
   content: {
     flex: 1,
     alignItems: "center",
@@ -670,7 +663,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginLeft: 6,
   },
-
   choiceCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -692,7 +684,6 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   choiceDesc: { fontSize: 13, color: ANN.textSecondary, fontWeight: "500" },
-
   formArea: { width: "100%" },
   label: {
     fontSize: 14,
@@ -719,7 +710,6 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     ...((Platform.OS === "web" ? { outlineStyle: "none" } : {}) as any),
   },
-
   joinButton: {
     backgroundColor: ANN.orange,
     alignItems: "center",

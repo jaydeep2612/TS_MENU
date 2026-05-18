@@ -16,10 +16,12 @@ export type CartItem = {
   name: string;
 };
 
+// 👇 FIX 1: Added type to TableData so the app remembers it's a room on restart
 export type TableData = {
   rId: string;
   tId: string;
   token: string;
+  type?: "room" | "table";
 } | null;
 
 type SessionContextType = {
@@ -35,6 +37,12 @@ type SessionContextType = {
   setCustomerName: (name: string) => void;
   startSession: (name: string, mode: "new" | "join") => Promise<void>;
   clearSession: () => Promise<void>;
+  activateRoomSession: (
+    data: any,
+    rId: string,
+    tId: string,
+    token: string,
+  ) => Promise<void>;
   updateCart: (
     id: number,
     delta: number,
@@ -57,18 +65,16 @@ export const SessionProvider = ({
 }: {
   children: React.ReactNode;
 }) => {
-  // --- STATE ---
-  const [isReady, setIsReady] = useState(false); // Hydration guard
-  const [tableData, setTableData] = useState<TableData>(null); // QR URL Params
+  const [isReady, setIsReady] = useState(false);
+  const [tableData, setTableData] = useState<TableData>(null);
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [customerName, setCustomerName] = useState("");
   const [joinStatus, setJoinStatus] = useState<string | null>(null);
-  const [isPrimary, setIsPrimary] = useState(false); // Host vs Guest
+  const [isPrimary, setIsPrimary] = useState(false);
   const [cart, setCart] = useState<Record<number, CartItem>>({});
   const [menuData, setMenuData] = useState<any>(null);
   const [orders, setOrders] = useState<any[]>([]);
 
-  // --- 1. LOAD PERSISTED STATE ON MOUNT ---
   useEffect(() => {
     const loadStoredSession = async () => {
       try {
@@ -78,7 +84,7 @@ export const SessionProvider = ({
         const storedCart = await AsyncStorage.getItem("cart");
         const primary = await AsyncStorage.getItem("isPrimary");
         const status = await AsyncStorage.getItem("joinStatus");
-        const storedOrders = await AsyncStorage.getItem("orders"); // 🔥 NEW
+        const storedOrders = await AsyncStorage.getItem("orders");
 
         if (storedTable) setTableData(JSON.parse(storedTable));
         if (token) setSessionToken(token);
@@ -86,17 +92,16 @@ export const SessionProvider = ({
         if (storedCart) setCart(JSON.parse(storedCart));
         if (primary) setIsPrimary(primary === "true");
         if (status) setJoinStatus(status);
-        if (storedOrders) setOrders(JSON.parse(storedOrders)); // 🔥 NEW
+        if (storedOrders) setOrders(JSON.parse(storedOrders));
       } catch (e) {
         console.error("Failed to load session from storage", e);
       } finally {
-        setIsReady(true); // Hydration is complete, safe to render app
+        setIsReady(true);
       }
     };
     loadStoredSession();
   }, []);
 
-  // --- 2. PERSIST STATE CHANGES (AUTOSAVE) ---
   useEffect(() => {
     if (!isReady) return;
 
@@ -104,10 +109,9 @@ export const SessionProvider = ({
     if (sessionToken) AsyncStorage.setItem("sessionToken", sessionToken);
     AsyncStorage.setItem("customerName", customerName);
     AsyncStorage.setItem("cart", JSON.stringify(cart));
-    AsyncStorage.setItem("orders", JSON.stringify(orders)); // 🔥 NEW
+    AsyncStorage.setItem("orders", JSON.stringify(orders));
     AsyncStorage.setItem("isPrimary", isPrimary ? "true" : "false");
 
-    // Actively remove ghost state if status becomes null
     if (joinStatus) {
       AsyncStorage.setItem("joinStatus", joinStatus);
     } else {
@@ -121,10 +125,9 @@ export const SessionProvider = ({
     isPrimary,
     joinStatus,
     isReady,
-    orders, // 🔥 THIS IS THE DEPENDENCY ARRAY FIX! We added 'orders' here.
+    orders,
   ]);
 
-  // --- 3. OPTIMIZED CART LOGIC ---
   const updateCart = (
     id: number,
     delta: number,
@@ -132,13 +135,11 @@ export const SessionProvider = ({
     name: string = "",
   ) => {
     setCart((prev) => {
-      // Safety check: Prevent decreasing an item that isn't in the cart
       if (!prev[id] && delta < 0) return prev;
 
       const currentItem = prev[id] || { qty: 0, price, name };
       const newQty = currentItem.qty + delta;
 
-      // If quantity hits 0, remove it from the cart object
       if (newQty <= 0) {
         const { [id]: _, ...rest } = prev;
         return rest;
@@ -149,7 +150,6 @@ export const SessionProvider = ({
 
   const clearCart = () => setCart({});
 
-  // Calculate Totals using useMemo (O(N) operation on cart items only)
   const { cartTotalQty, cartTotalPrice } = useMemo(() => {
     let qty = 0;
     let price = 0;
@@ -160,7 +160,6 @@ export const SessionProvider = ({
     return { cartTotalQty: qty, cartTotalPrice: price };
   }, [cart]);
 
-  // --- 4. API ACTIONS ---
   const startSession = async (name: string, mode: "new" | "join") => {
     try {
       if (!tableData) {
@@ -197,14 +196,16 @@ export const SessionProvider = ({
 
   const clearSession = async () => {
     try {
-      // 1. Tell backend we are leaving
       if (sessionToken) {
-        await SessionService.leaveSession(sessionToken);
+        // Pass type so backend knows if it's cleaning a RoomSession or QrSession
+        await SessionService.leaveSession(
+          sessionToken,
+          tableData?.type || "table",
+        );
       }
     } catch (e) {
       console.error("Failed to notify server of leave", e);
     } finally {
-      // 2. Reset all React state to completely blank instantly (Added setMenuData)
       setSessionToken(null);
       setCustomerName("");
       setCart({});
@@ -212,9 +213,8 @@ export const SessionProvider = ({
       setJoinStatus(null);
       setOrders([]);
       setTableData(null);
-      setMenuData(null); // 🔥 Prevents UI flickering of old menus
+      setMenuData(null);
 
-      // 3. Wipe Persistent Storage completely
       await AsyncStorage.multiRemove([
         "sessionToken",
         "customerName",
@@ -225,6 +225,29 @@ export const SessionProvider = ({
         "orders",
       ]);
     }
+  };
+
+  const activateRoomSession = async (
+    data: any,
+    rId: string,
+    tId: string,
+    token: string,
+  ) => {
+    setSessionToken(data.session_token);
+    setCustomerName(data.guest_name);
+    setJoinStatus("active");
+    setIsPrimary(true);
+    // 👇 FIX 2: Explicitly save type: "room" into state
+    setTableData({ rId, tId, token, type: "room" });
+
+    await AsyncStorage.multiSet([
+      ["sessionToken", data.session_token],
+      ["customerName", data.guest_name],
+      ["joinStatus", "active"],
+      ["isPrimary", "true"],
+      // 👇 FIX 3: Explicitly save type: "room" into local storage
+      ["tableData", JSON.stringify({ rId, tId, token, type: "room" })],
+    ]);
   };
 
   return (
@@ -242,6 +265,7 @@ export const SessionProvider = ({
         setCustomerName,
         startSession,
         clearSession,
+        activateRoomSession,
         updateCart,
         clearCart,
         cartTotalQty,

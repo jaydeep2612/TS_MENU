@@ -1,10 +1,9 @@
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Dimensions,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -17,13 +16,11 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import QRCode from "react-native-qrcode-svg"; // 👈 ADDED
+import QRCode from "react-native-qrcode-svg";
 import uuid from "react-native-uuid";
 import { THEME } from "../../constants/theme";
 import { useSession } from "../../context/SessionContext";
 import { OrderService } from "../../services/order.service";
-
-const { width } = Dimensions.get("window");
 
 const ANN = {
   orange: "#fe9a54",
@@ -49,27 +46,31 @@ export default function CartTab() {
     clearSession,
   } = useSession();
 
+  // Extract type
+  const { type } = useLocalSearchParams<{ type?: string }>();
+  const isRoom = type === "room";
+
   const [placing, setPlacing] = useState(false);
   const [itemNotes, setItemNotes] = useState<Record<number, string>>({});
   const [orderNote, setOrderNote] = useState("");
   const [pendingKey, setPendingKey] = useState<string | null>(null);
-
-  // 👇 NEW: Payment Modal State
   const [showPaymentModal, setShowPaymentModal] = useState(false);
 
   const currency = menuData?.restaurant?.currency_symbol || "₹";
-  const isPayFirst = menuData?.restaurant?.is_pay_first === true; // Check Model
+  const isPayFirst = menuData?.restaurant?.is_pay_first === true;
   const upiId = menuData?.restaurant?.upi_id || "";
   const restaurantName = menuData?.restaurant?.name || "Restaurant";
+  const tableNum = menuData?.table?.number || tableData?.tId || "?";
 
-  // Generate UPI String
+  // Updated UPI String to handle Rooms vs Tables
   const pa = encodeURIComponent(upiId);
   const pn = encodeURIComponent(restaurantName);
-  const tn = encodeURIComponent(`Order for Table ${tableData?.tId || ""}`);
+  const tn = encodeURIComponent(
+    `Order for ${isRoom ? "Room" : "Table"} ${tableNum}`,
+  );
   const am = cartTotalPrice.toFixed(2);
   const upiString = `upi://pay?pa=${pa}&pn=${pn}&tn=${tn}&am=${am}&cu=INR`;
 
-  // 👇 The missing function you needed
   const handleItemNoteChange = (id: number, text: string) => {
     setItemNotes((prev) => ({ ...prev, [id]: text }));
   };
@@ -78,12 +79,11 @@ export default function CartTab() {
     setPendingKey(null);
   }, [cart, itemNotes, orderNote]);
 
-  // Triggered when user clicks "Confirm & Place Order"
   const handleProceed = () => {
     if (isPayFirst) {
-      setShowPaymentModal(true); // Open modal first!
+      setShowPaymentModal(true);
     } else {
-      handlePlaceOrder("pending"); // Normal flow
+      handlePlaceOrder("pending");
     }
   };
 
@@ -91,7 +91,7 @@ export default function CartTab() {
     if (placing) return;
     if (!sessionToken || cartTotalQty === 0) return;
     if (!tableData) {
-      Alert.alert("Error", "Missing table connection.");
+      Alert.alert("Error", `Missing ${isRoom ? "room" : "table"} connection.`);
       return;
     }
 
@@ -116,7 +116,8 @@ export default function CartTab() {
         payload,
         orderNote.trim(),
         idempotencyKey,
-        paymentMethod, // 👈 Send the method to the API
+        paymentMethod,
+        tableData.type || "table", // 👈 EXPLICITLY ADDED TYPE HERE
       );
 
       clearCart();
@@ -125,7 +126,6 @@ export default function CartTab() {
       setPendingKey(null);
       setShowPaymentModal(false);
 
-      // Navigate to Orders Tab directly. The manager is now handling the verification.
       setTimeout(() => {
         router.push("/(tabs)/orders");
       }, 100);
@@ -137,7 +137,10 @@ export default function CartTab() {
         err?.status === 404 ||
         err?.message?.toLowerCase().includes("expired")
       ) {
-        Alert.alert("Session Ended", "Your table session has been closed.");
+        Alert.alert(
+          "Session Ended",
+          `Your ${isRoom ? "room" : "table"} session has been closed.`,
+        );
         await clearSession();
         router.replace("/");
         return;
@@ -166,7 +169,6 @@ export default function CartTab() {
     ]);
   };
 
-  // ─── EMPTY CART STATE ───
   if (cartTotalQty === 0) {
     return (
       <View style={styles.mainWrapper}>
@@ -200,7 +202,6 @@ export default function CartTab() {
     );
   }
 
-  // ─── FULL CART STATE ───
   return (
     <View style={styles.mainWrapper}>
       <Image
@@ -293,7 +294,7 @@ export default function CartTab() {
                     />
                     <TextInput
                       style={styles.noteInput}
-                      placeholder={`Add note (e.g. less spicy)`}
+                      placeholder="Add note (e.g. less spicy)"
                       placeholderTextColor={THEME.textSecondary}
                       value={itemNotes[id] || ""}
                       onChangeText={(text) => handleItemNoteChange(id, text)}
@@ -373,7 +374,6 @@ export default function CartTab() {
         </KeyboardAvoidingView>
       </SafeAreaView>
 
-      {/* 👇 NEW: PAYMENT MODAL FOR PAY-FIRST RESTAURANTS 👇 */}
       <Modal visible={showPaymentModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -661,7 +661,6 @@ const styles = StyleSheet.create({
   },
   totalLabel: { fontSize: 16, fontWeight: "bold", color: ANN.darkBlue },
   totalValue: { fontSize: 26, fontWeight: "900", color: ANN.red },
-  taxDisclaimerText: { fontSize: 11, color: "#94A3B8", fontStyle: "italic" },
   primaryBtn: {
     backgroundColor: ANN.orange,
     padding: 18,
@@ -722,8 +721,6 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
   },
   browseBtnText: { color: "#FFF", fontWeight: "bold", fontSize: 16 },
-
-  // MODAL STYLES
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(28,28,30,0.7)",

@@ -13,7 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import QRCode from "react-native-qrcode-svg"; // 👈 ADDED
+import QRCode from "react-native-qrcode-svg";
 import { THEME } from "../../constants/theme";
 import { useSession } from "../../context/SessionContext";
 import { initEcho } from "../../services/echo";
@@ -36,6 +36,9 @@ export default function OrdersTab() {
   const { sessionToken, tableData, menuData, orders, setOrders, clearSession } =
     useSession();
 
+  // 👇 ADDED: Extract type
+  const isRoom = tableData?.type === "room";
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<
@@ -47,7 +50,7 @@ export default function OrdersTab() {
   );
   const [processingPaymentId, setProcessingPaymentId] = useState<
     string | number | null
-  >(null); // 👈 ADDED
+  >(null);
 
   const echoRef = useRef<any>(null);
   const processedEventsRef = useRef<Set<string>>(new Set());
@@ -59,10 +62,8 @@ export default function OrdersTab() {
   const mergeOrders = (incomingOrders: any[]) => {
     setOrders((prev) => {
       const map = new Map(prev.map((o) => [o.id, o]));
-
       incomingOrders.forEach((incoming) => {
         const existing = map.get(incoming.id);
-
         if (existing) {
           map.set(incoming.id, {
             ...existing,
@@ -76,7 +77,6 @@ export default function OrdersTab() {
           map.set(incoming.id, incoming);
         }
       });
-
       return Array.from(map.values())
         .sort(
           (a, b) =>
@@ -90,13 +90,15 @@ export default function OrdersTab() {
     async (signal?: AbortSignal) => {
       if (!sessionToken) return;
       try {
-        const data = await OrderService.getOrders(sessionToken, signal);
+        const data = await OrderService.getOrders(
+          sessionToken,
+          tableData?.type || "table",
+          signal,
+        );
         const incomingOrders = Array.isArray(data) ? data : data.orders || [];
         mergeOrders(incomingOrders);
       } catch (e: any) {
-        if (e.name !== "AbortError") {
-          console.error("Failed to fetch orders", e);
-        }
+        if (e.name !== "AbortError") console.error("Failed to fetch orders", e);
       } finally {
         setLoading(false);
         setRefreshing(false);
@@ -107,21 +109,15 @@ export default function OrdersTab() {
 
   useEffect(() => {
     const abortController = new AbortController();
-
     fetchOrders(abortController.signal).catch((err) => {
       if (err.name === "AbortError") return;
-      console.error(err);
     });
-
-    return () => {
-      abortController.abort();
-    };
+    return () => abortController.abort();
   }, [fetchOrders]);
 
   const onRefresh = () => {
     setRefreshing(true);
     fetchOrders();
-
     if (connectionStatus === "offline" && echoRef.current) {
       setConnectionStatus("connecting");
       echoRef.current.connector.pusher.connection.connect();
@@ -135,10 +131,7 @@ export default function OrdersTab() {
     }
 
     let isMounted = true;
-
-    if (!echoRef.current) {
-      echoRef.current = initEcho(sessionToken);
-    }
+    if (!echoRef.current) echoRef.current = initEcho(sessionToken);
     const echoInstance = echoRef.current;
 
     echoInstance.connector.pusher.connection.bind(
@@ -150,9 +143,8 @@ export default function OrdersTab() {
           setConnectionStatus("connecting");
         else if (
           ["disconnected", "unavailable", "failed"].includes(states.current)
-        ) {
+        )
           setConnectionStatus("offline");
-        }
       },
     );
 
@@ -179,7 +171,7 @@ export default function OrdersTab() {
         if (!isMounted) return;
         Alert.alert(
           "Thank You!",
-          "Your table session has been closed by the restaurant. We hope to see you again soon!",
+          `Your ${isRoom ? "room" : "table"} session has been closed. We hope to see you again soon!`,
         );
         await clearSession();
         router.replace("/");
@@ -196,7 +188,7 @@ export default function OrdersTab() {
         echoRef.current = null;
       }
     };
-  }, [sessionToken, sessionId, fetchOrders]);
+  }, [sessionToken, sessionId, fetchOrders, isRoom]);
 
   const displayOrders = Array.isArray(orders) ? orders : [];
 
@@ -223,14 +215,13 @@ export default function OrdersTab() {
     if (!sessionToken) return;
     try {
       setCancellingId(orderId);
-      await OrderService.cancelOrder(sessionToken, orderId);
-
-      if (Platform.OS === "web") {
-        window.alert("Order has been cancelled.");
-      } else {
-        Alert.alert("Success", "Order has been cancelled.");
-      }
-
+      await OrderService.cancelOrder(
+        sessionToken,
+        orderId,
+        tableData?.type || "table",
+      );
+      if (Platform.OS === "web") window.alert("Order has been cancelled.");
+      else Alert.alert("Success", "Order has been cancelled.");
       fetchOrders();
     } catch (error: any) {
       const msg =
@@ -265,23 +256,19 @@ export default function OrdersTab() {
     }
   };
 
-  // 👇 NEW: Submits the payment notification to the manager 👇
   const handlePaymentSubmitted = async (orderId: number, method: string) => {
     if (!sessionToken) return;
     try {
       setProcessingPaymentId(orderId);
       await OrderService.notifyPaymentDone(sessionToken, orderId, method);
-
-      if (Platform.OS === "web") {
+      if (Platform.OS === "web")
         window.alert("Payment Submitted! The manager is verifying your order.");
-      } else {
+      else
         Alert.alert(
           "Payment Submitted",
           "The manager is verifying your payment and will start cooking soon.",
         );
-      }
-
-      fetchOrders(); // Refresh status
+      fetchOrders();
     } catch (e: any) {
       Alert.alert(
         "Error",
@@ -294,8 +281,6 @@ export default function OrdersTab() {
 
   const getStatusUI = (status: string) => {
     const s = status?.toLowerCase() || "";
-
-    // 👇 NEW: Payment Pending Status 👇
     if (s === "payment_pending")
       return {
         color: THEME.danger,
@@ -303,7 +288,6 @@ export default function OrdersTab() {
         text: "Payment Required",
         icon: "wallet-outline",
       };
-
     if (s === "accepted")
       return {
         color: THEME.primary,
@@ -371,22 +355,21 @@ export default function OrdersTab() {
       orderStatus === "placed" ||
       orderStatus === "payment_pending";
     const isPreparing = orderStatus === "preparing";
-
-    // 👇 NEW: Check if this specific order requires payment immediately
     const isPaymentRequired = orderStatus === "payment_pending";
 
     const displayTotal = isCancelled
       ? 0
       : parseFloat(String(order.total_amount)) || 0;
-
     const displayOrderNumber = displayOrders.length - index;
 
-    // UPI String Generation
+    // 👇 Updated UPI String
     const upiId = menuData?.restaurant?.upi_id || "";
     const restaurantName = menuData?.restaurant?.name || "Restaurant";
     const pa = encodeURIComponent(upiId);
     const pn = encodeURIComponent(restaurantName);
-    const tn = encodeURIComponent(`Order for Table ${tableData?.tId || ""}`);
+    const tn = encodeURIComponent(
+      `Order for ${isRoom ? "Room" : "Table"} ${tableData?.tId || ""}`,
+    );
     const am = displayTotal.toFixed(2);
     const upiString = `upi://pay?pa=${pa}&pn=${pn}&tn=${tn}&am=${am}&cu=INR`;
 
@@ -395,7 +378,7 @@ export default function OrdersTab() {
         style={[
           styles.orderCard,
           isCancelled && { opacity: 0.5, borderColor: THEME.danger },
-          isPaymentRequired && { borderColor: THEME.danger, borderWidth: 2 }, // Highlight unpaid orders
+          isPaymentRequired && { borderColor: THEME.danger, borderWidth: 2 },
         ]}
       >
         <View style={styles.orderHeader}>
@@ -511,7 +494,6 @@ export default function OrdersTab() {
           </Text>
         </View>
 
-        {/* 👇 NEW: INLINE PAYMENT UI FOR PAY FIRST MODEL 👇 */}
         {isPaymentRequired && (
           <View style={styles.paymentSection}>
             <Text style={styles.paymentRequiredTitle}>Action Required</Text>
@@ -544,7 +526,6 @@ export default function OrdersTab() {
                   <Text style={styles.payBtnText}>Paid via UPI</Text>
                 )}
               </TouchableOpacity>
-
               <TouchableOpacity
                 style={[
                   styles.payBtn,
@@ -964,8 +945,6 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   askBillBtnText: { color: "#fff", fontSize: 18, fontWeight: "bold" },
-
-  // NEW PAYMENT SECTION STYLES
   paymentSection: {
     marginTop: 16,
     paddingTop: 16,
