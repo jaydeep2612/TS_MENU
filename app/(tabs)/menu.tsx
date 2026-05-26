@@ -22,8 +22,8 @@ import { initEcho } from "../../services/echo";
 import { SessionService } from "../../services/session.service";
 
 const { width } = Dimensions.get("window");
-const CARD_WIDTH = width > 480 ? 200 : width * 0.45;
 
+// ─── Ann Sathi Brand Colors ──────────────────────────────────────────────────
 const ANN = {
   orange: "#fe9a54",
   red: "#f16b3f",
@@ -34,25 +34,34 @@ const ANN = {
   blueLight: "#eef2fb",
   darkBlueLight: "#e8ecf7",
 };
+// ─────────────────────────────────────────────────────────────────────────────
 
 const DUMMY_MENU = [
   {
     id: 1,
     name: "Truffle Burger",
     price: 22.5,
-    desc: "Wagyu beef...",
+    desc: "Wagyu beef, truffle aioli, caramelized onions, Gruyère cheese, brioche bun.",
     is_popular: true,
     type: "non-veg",
-    image_path: "https://via.placeholder.com/150",
+    image_path:
+      "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?q=80&w=300&auto=format&fit=crop",
+    is_out_of_stock: false,
+    is_limited_stock: false,
+    stock_label: null,
   },
   {
     id: 2,
     name: "Basil Pesto Pasta",
     price: 18.9,
-    desc: "Handmade...",
+    desc: "Handmade linguine, house-made basil pesto, toasted pine nuts, parmesan.",
     is_popular: false,
     type: "veg",
-    image_path: "https://via.placeholder.com/150",
+    image_path:
+      "https://images.unsplash.com/photo-1473093295043-cdd812d0e601?q=80&w=300&auto=format&fit=crop",
+    is_out_of_stock: false,
+    is_limited_stock: false,
+    stock_label: null,
   },
 ];
 
@@ -79,8 +88,6 @@ export default function MenuScreen() {
     clearSession,
   } = useSession();
 
-  const isRoom = tableData?.type === "room";
-
   const [activeCategoryId, setActiveCategoryId] = useState<string | number>(
     "all",
   );
@@ -88,6 +95,7 @@ export default function MenuScreen() {
   const [dietaryFilter, setDietaryFilter] = useState<"all" | "veg" | "non-veg">(
     "all",
   );
+  const [hideOutOfStock, setHideOutOfStock] = useState(false);
   const [loadingMenu, setLoadingMenu] = useState(true);
 
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
@@ -95,6 +103,7 @@ export default function MenuScreen() {
   const [showRequestsModal, setShowRequestsModal] = useState(false);
   const echoRef = useRef<any>(null);
   const processedEventsRef = useRef<Set<string>>(new Set());
+  const mainScrollViewRef = useRef<ScrollView>(null);
 
   const currentSessionId =
     menuData?.session?.id ||
@@ -102,6 +111,7 @@ export default function MenuScreen() {
     menuData?.session_id ||
     tableData?.tId;
 
+  // ─── 1. FETCH MENU ───────────────────────────────────────────────────────
   useEffect(() => {
     const loadMenu = async () => {
       if (!tableData || !sessionToken) return;
@@ -112,7 +122,6 @@ export default function MenuScreen() {
           tableData.tId,
           tableData.token,
           sessionToken,
-          tableData.type,
         );
         if (data && data.categories) {
           setMenuData(data);
@@ -122,11 +131,15 @@ export default function MenuScreen() {
       } catch (e: any) {
         if (e.status === 401 || e.status === 403 || e.status === 404) {
           await clearSession();
-          const errorMsg = `Session Expired. Please scan the ${isRoom ? "room" : "table"} QR code again.`;
           if (Platform.OS === "web") {
-            window.alert(errorMsg);
+            window.alert(
+              "Session Expired. Please scan the table QR code again.",
+            );
           } else {
-            Alert.alert("Session Expired", errorMsg);
+            Alert.alert(
+              "Session Expired",
+              "Please scan the table QR code again.",
+            );
           }
           router.replace("/");
           return;
@@ -137,8 +150,9 @@ export default function MenuScreen() {
       }
     };
     loadMenu();
-  }, [tableData, sessionToken, isRoom]);
+  }, [tableData, sessionToken]);
 
+  // ─── 2. REALTIME HOST LISTENERS ─────────────────────────────────────────
   useEffect(() => {
     let isMounted = true;
     const setupHostListener = async () => {
@@ -152,13 +166,14 @@ export default function MenuScreen() {
         if (isMounted) {
           setPendingRequests(res.pending || []);
           setActiveGuests(res.guests || []);
-          if (res.pending && res.pending.length > 0) {
-            setShowRequestsModal(true);
-          }
+          if (res.pending && res.pending.length > 0) setShowRequestsModal(true);
         }
-      } catch (e) {}
+      } catch (e) {
+        console.error("Failed to fetch host data", e);
+      }
 
       if (!echoRef.current) echoRef.current = initEcho(sessionToken);
+
       const channel = echoRef.current.private(`session.${currentSessionId}`);
 
       channel.listen(".GuestJoinRequested", (event: any) => {
@@ -175,17 +190,20 @@ export default function MenuScreen() {
           setShowRequestsModal(true);
         }
       });
+
       channel.listen(".SessionEnded", async () => {
         if (!isMounted) return;
         Alert.alert(
           "Thank You!",
-          `Your ${isRoom ? "room" : "table"} session has been closed. We hope to see you again soon!`,
+          "Your table session has been closed by the restaurant. We hope to see you again soon!",
         );
         await clearSession();
         router.replace("/");
       });
     };
+
     setupHostListener();
+
     return () => {
       isMounted = false;
       if (echoRef.current && currentSessionId) {
@@ -195,7 +213,7 @@ export default function MenuScreen() {
         echoRef.current.leave(`session.${currentSessionId}`);
       }
     };
-  }, [isPrimary, tableData?.tId, sessionToken, currentSessionId, isRoom]);
+  }, [isPrimary, tableData?.tId, sessionToken, currentSessionId]);
 
   const handleRequestResponse = async (
     id: number,
@@ -210,22 +228,25 @@ export default function MenuScreen() {
         if (updated.length === 0) setShowRequestsModal(false);
         return updated;
       });
-      if (action === "approve" && guestToMove)
+      if (action === "approve" && guestToMove) {
         setActiveGuests((prev) => [...prev, guestToMove]);
+      }
     } catch (e) {
       Alert.alert("Error", "Could not process the request. Please try again.");
     }
   };
 
   const handleLeaveTable = () => {
-    const msg = `Are you sure you want to disconnect from this ${isRoom ? "room" : "table"}?`;
     if (Platform.OS === "web") {
-      if (window.confirm(msg)) clearSession().then(() => router.replace("/"));
+      const confirmed = window.confirm(
+        "Are you sure you want to disconnect from this table?",
+      );
+      if (confirmed) clearSession().then(() => router.replace("/"));
       return;
     }
     Alert.alert(
-      `Leave ${isRoom ? "Room" : "Table"}?`,
-      `${msg} Your cart and session will be cleared.`,
+      "Leave Table?",
+      "Are you sure you want to disconnect from this table? Your cart and session will be cleared.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -274,21 +295,36 @@ export default function MenuScreen() {
     });
   }, [categories]);
 
+  // ── Count out-of-stock items for banner ──
+  const outOfStockCount = useMemo(() => {
+    let count = 0;
+    categories.forEach((cat: any) => {
+      (cat.items || []).forEach((item: any) => {
+        if (item.is_out_of_stock) count++;
+      });
+    });
+    return count;
+  }, [categories]);
+
   const processedCategories = useMemo(() => {
     const query = searchQuery.toLowerCase().trim();
     return categories
       .map((cat: any) => {
         if (cat.is_active === false || cat.is_active === 0) return null;
+
         const filteredItems = (cat.items || []).filter((item: any) => {
-          if (item.is_available === false || item.is_available === 0)
-            return false;
+          // If hide out of stock is on, skip those items
+          if (hideOutOfStock && item.is_out_of_stock) return false;
+
           const safeType = item.type
             ? String(item.type).toLowerCase()
             : item.is_veg === false
               ? "non-veg"
               : "veg";
+
           if (dietaryFilter !== "all" && safeType !== dietaryFilter)
             return false;
+
           if (query) {
             const matchName = item.name?.toLowerCase().includes(query);
             const matchDesc =
@@ -298,14 +334,18 @@ export default function MenuScreen() {
           }
           return true;
         });
-        filteredItems.sort(
-          (a: any, b: any) =>
-            (parseFloat(a.price) || 0) - (parseFloat(b.price) || 0),
-        );
+
+        // Sort: available first, then out-of-stock at bottom; within each group sort by price
+        filteredItems.sort((a: any, b: any) => {
+          if (a.is_out_of_stock && !b.is_out_of_stock) return 1;
+          if (!a.is_out_of_stock && b.is_out_of_stock) return -1;
+          return (parseFloat(a.price) || 0) - (parseFloat(b.price) || 0);
+        });
+
         return { ...cat, items: filteredItems };
       })
       .filter((cat: any) => cat && cat.items.length > 0);
-  }, [categories, searchQuery, dietaryFilter]);
+  }, [categories, searchQuery, dietaryFilter, hideOutOfStock]);
 
   const isApproved = joinStatus === "active" || joinStatus === "approved";
   const isOrderingLocked = !isApproved;
@@ -325,9 +365,111 @@ export default function MenuScreen() {
       ? processedCategories[currentCatIndex + 1]
       : null;
 
-  const renderMenuItemCard = (item: any, isGrid: boolean = false) => {
+  const handleCategoryChange = (id: string | number) => {
+    setActiveCategoryId(id);
+    mainScrollViewRef.current?.scrollTo({ y: 0, animated: true });
+  };
+
+  // ─── STOCK BADGE COMPONENT ──────────────────────────────────────────────
+  const StockBadge = ({
+    item,
+    currentQty,
+  }: {
+    item: any;
+    currentQty: number;
+  }) => {
+    if (item.is_out_of_stock) {
+      return (
+        <View style={styles.outOfStockBadge}>
+          <Text style={styles.outOfStockBadgeText}>Out of Stock</Text>
+        </View>
+      );
+    }
+
+    // Show "Only X left" when limited stock
+    if (item.is_limited_stock && item.stock_label) {
+      const remaining = item.stock_quantity - currentQty;
+      return (
+        <View style={styles.limitedStockBadge}>
+          <MaterialIcons name="access-time" size={9} color="#92400e" />
+          <Text style={styles.limitedStockBadgeText}>
+            {remaining > 0
+              ? `Only ${remaining} left${currentQty > 0 ? ` (${currentQty} in cart)` : ""}`
+              : `Max ${item.stock_quantity} in cart`}
+          </Text>
+        </View>
+      );
+    }
+
+    // Even if not "limited stock" tier, warn when cart qty is getting close to stock cap
+    if (
+      item.track_stock === true &&
+      item.stock_quantity !== null &&
+      currentQty > 0 &&
+      currentQty >= item.stock_quantity
+    ) {
+      return (
+        <View style={styles.limitedStockBadge}>
+          <MaterialIcons name="check-circle" size={9} color="#92400e" />
+          <Text style={styles.limitedStockBadgeText}>Max qty reached</Text>
+        </View>
+      );
+    }
+
+    return null;
+  };
+
+  // ─── STOCK-AWARE ADD TO CART ────────────────────────────────────────────
+  // Called instead of updateCart(+1) so we can enforce stock limits
+  const handleAddToCart = (item: any) => {
     const currentQty = cart[item.id]?.qty || 0;
     const itemPrice = parseFloat(item.price) || 0;
+
+    // Hard stock cap: if track_stock is on and stock_quantity is set,
+    // never allow cart qty to exceed available stock
+    if (
+      item.track_stock === true &&
+      item.stock_quantity !== null &&
+      item.stock_quantity !== undefined
+    ) {
+      const maxAllowed = Number(item.stock_quantity);
+
+      if (currentQty >= maxAllowed) {
+        // Show a friendly alert — same pattern as rest of app
+        if (Platform.OS === "web") {
+          window.alert(
+            `Only ${maxAllowed} unit${maxAllowed !== 1 ? "s" : ""} of "${item.name}" are available. You already have ${currentQty} in your cart.`,
+          );
+        } else {
+          Alert.alert(
+            "Stock Limit Reached",
+            `Only ${maxAllowed} unit${maxAllowed !== 1 ? "s" : ""} of "${item.name}" are available.\nYou already have ${currentQty} in your cart.`,
+            [{ text: "OK" }],
+          );
+        }
+        return; // block the add
+      }
+    }
+
+    updateCart(item.id, 1, itemPrice, item.name);
+  };
+
+  // ─── CARD RENDERER ──────────────────────────────────────────────────────
+  const renderMenuItemCard = (item: any) => {
+    const currentQty = cart[item.id]?.qty || 0;
+    const itemPrice = parseFloat(item.price) || 0;
+    const isPopular = item.is_popular;
+    const isOutOfStock = item.is_out_of_stock === true;
+    const isLimited = item.is_limited_stock === true;
+
+    // Whether this item has a hard stock cap (track_stock ON + qty set)
+    const hasStockCap =
+      item.track_stock === true &&
+      item.stock_quantity !== null &&
+      item.stock_quantity !== undefined;
+    const maxAllowed = hasStockCap ? Number(item.stock_quantity) : Infinity;
+    const isAtStockLimit = hasStockCap && currentQty >= maxAllowed;
+
     const safeType = item.type
       ? String(item.type).toLowerCase()
       : item.is_veg === false
@@ -338,12 +480,14 @@ export default function MenuScreen() {
       <View
         key={`item-${item.id}`}
         style={[
-          styles.sliderCard,
-          isGrid && styles.gridCard,
-          isOrderingLocked && { opacity: 0.6 },
+          styles.gridCard,
+          (isOrderingLocked || isOutOfStock) && {
+            opacity: isOutOfStock ? 0.55 : 0.6,
+          },
         ]}
       >
-        <View style={styles.sliderImageContainer}>
+        {/* Image with out-of-stock overlay */}
+        <View style={styles.cardImageWrapper}>
           <Image
             source={{
               uri:
@@ -351,64 +495,119 @@ export default function MenuScreen() {
                 item.image_path ||
                 "https://via.placeholder.com/150",
             }}
-            style={styles.sliderImage}
+            style={[
+              styles.cardImage,
+              isOutOfStock && styles.cardImageGrayscale,
+            ]}
           />
-          {item.is_popular && (
-            <View style={styles.sliderBadge}>
-              <Text style={styles.sliderBadgeText}>POPULAR</Text>
+          {/* Out of stock ribbon overlay on image */}
+          {isOutOfStock && (
+            <View style={styles.outOfStockOverlay}>
+              <Text style={styles.outOfStockOverlayText}>SOLD OUT</Text>
+            </View>
+          )}
+          {/* Popular badge on image */}
+          {isPopular && !isOutOfStock && (
+            <View style={styles.popularBadge}>
+              <Text style={styles.popularBadgeText}>⭐ Popular</Text>
             </View>
           )}
         </View>
 
-        <View style={styles.sliderContent}>
-          <View>
-            <View style={styles.sliderTitleRow}>
-              <Text style={styles.sliderItemName} numberOfLines={1}>
-                {item.name}
-              </Text>
-              {safeType === "veg" ? (
-                <View style={styles.vegDotSmall} />
-              ) : (
-                <View style={styles.nonVegTriangleSmall} />
-              )}
+        <View style={styles.cardContent}>
+          {/* Veg / Non-Veg indicator */}
+          <View style={styles.typeRow}>
+            <View
+              style={[
+                styles.typeIndicator,
+                safeType === "veg"
+                  ? styles.vegIndicator
+                  : styles.nonVegIndicator,
+              ]}
+            >
+              <View
+                style={[
+                  styles.typeInnerDot,
+                  safeType === "veg"
+                    ? styles.vegDotInner
+                    : styles.nonVegDotInner,
+                ]}
+              />
             </View>
-            <Text style={styles.sliderItemDesc} numberOfLines={2}>
-              {item.description || item.desc}
+            <Text style={styles.typeLabel}>
+              {safeType === "veg" ? "Veg" : "Non-Veg"}
             </Text>
           </View>
 
-          <View style={styles.sliderFooter}>
-            <Text style={styles.sliderPrice}>₹{itemPrice.toFixed(2)}</Text>
+          <Text style={styles.cardTitle} numberOfLines={2}>
+            {item.name}
+          </Text>
+
+          <Text style={styles.cardDesc} numberOfLines={2}>
+            {item.description || item.desc || ""}
+          </Text>
+
+          {/* Stock badge (out of stock / limited / max reached) */}
+          <StockBadge item={item} currentQty={currentQty} />
+
+          <View style={styles.cardBottomRow}>
+            <Text
+              style={[styles.cardPrice, isOutOfStock && { color: "#9CA3AF" }]}
+            >
+              ₹{itemPrice.toFixed(2)}
+            </Text>
+
+            {/* Stepper / Add Button — disabled if out of stock or ordering locked */}
             {!isOrderingLocked &&
-              (currentQty > 0 ? (
-                <View style={styles.sliderQtyControls}>
+              (isOutOfStock ? (
+                <View style={styles.notifyBtn}>
+                  <Text style={styles.notifyBtnText}>Notify</Text>
+                </View>
+              ) : (
+                <View style={styles.stepperContainer}>
                   <TouchableOpacity
                     onPress={() =>
                       updateCart(item.id, -1, itemPrice, item.name)
                     }
-                    style={styles.sliderQtyBtn}
+                    style={styles.stepperBtn}
+                    disabled={currentQty === 0}
                   >
                     <MaterialIcons
                       name="remove"
-                      size={16}
-                      color={ANN.darkBlue}
+                      size={14}
+                      color={currentQty === 0 ? "#D1D5DB" : "#94A3B8"}
                     />
                   </TouchableOpacity>
-                  <Text style={styles.sliderQtyText}>{currentQty}</Text>
-                  <TouchableOpacity
-                    onPress={() => updateCart(item.id, 1, itemPrice, item.name)}
-                    style={styles.sliderQtyBtn}
+
+                  <Text
+                    style={[
+                      styles.stepperQty,
+                      currentQty > 0 && styles.stepperQtyActive,
+                    ]}
                   >
-                    <MaterialIcons name="add" size={16} color={ANN.darkBlue} />
+                    {currentQty}
+                    {/* Show max cap hint e.g. "3/5" when limited */}
+                    {hasStockCap && currentQty > 0 && (
+                      <Text style={styles.stepperQtyMax}>/{maxAllowed}</Text>
+                    )}
+                  </Text>
+
+                  {/* + button: disabled & greyed when at stock limit */}
+                  <TouchableOpacity
+                    onPress={() => handleAddToCart(item)}
+                    style={[
+                      styles.stepperBtnDark,
+                      isAtStockLimit && styles.stepperBtnDisabled,
+                    ]}
+                    disabled={isAtStockLimit}
+                  >
+                    <MaterialIcons
+                      name="add"
+                      size={14}
+                      color={isAtStockLimit ? "#E5E7EB" : "#FFF"}
+                    />
                   </TouchableOpacity>
                 </View>
-              ) : (
-                <TouchableOpacity
-                  style={styles.sliderAddBtn}
-                  onPress={() => updateCart(item.id, 1, itemPrice, item.name)}
-                >
-                  <MaterialIcons name="add" size={20} color="#FFF" />
-                </TouchableOpacity>
               ))}
           </View>
         </View>
@@ -418,13 +617,10 @@ export default function MenuScreen() {
 
   return (
     <View style={styles.mainWrapper}>
-      <Image
-        source={require("../../assets/images/bg.png")}
-        style={styles.bgImage}
-      />
       <View style={styles.bgOverlay} />
 
       <SafeAreaView style={styles.container}>
+        {/* ── TOP BAR ── */}
         <View style={styles.topBar}>
           <TouchableOpacity style={styles.iconBtn} onPress={handleLeaveTable}>
             <MaterialIcons name="exit-to-app" size={26} color={THEME.danger} />
@@ -452,7 +648,7 @@ export default function MenuScreen() {
                 />
               )}
               <Text style={styles.topBarTitle}>
-                {isRoom ? "Room" : "Table"} {tableNumber} • {restaurantName}
+                Table {tableNumber} • {restaurantName}
               </Text>
             </View>
 
@@ -517,267 +713,329 @@ export default function MenuScreen() {
             </Text>
           </View>
         ) : (
-          <ScrollView
-            contentContainerStyle={styles.scrollContent}
-            keyboardShouldPersistTaps="handled"
-          >
-            <View
-              style={[styles.banner, isOrderingLocked && styles.bannerLocked]}
-            >
-              <View>
-                <View
-                  style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
-                >
-                  <MaterialIcons
-                    name={isApproved ? "lock-open" : "lock"}
-                    size={16}
-                    color={isApproved ? THEME.success : ANN.orange}
-                  />
-                  <Text
-                    style={[
-                      styles.bannerTitle,
-                      { color: isApproved ? THEME.success : ANN.orange },
-                    ]}
-                  >
-                    {isApproved ? "Ready to Order" : "Awaiting Approval"}
-                  </Text>
-                </View>
-                <Text style={styles.bannerSub}>
-                  {isApproved
-                    ? "Tap an item below to add it to your cart."
-                    : "Ordering is locked until host approves your table."}
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.searchContainer}>
-              <MaterialIcons
-                name="search"
-                size={20}
-                color={THEME.textSecondary}
-                style={{ marginRight: 8 }}
-              />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search for dishes..."
-                placeholderTextColor="#94A3B8"
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-              />
-              {searchQuery.length > 0 && (
-                <TouchableOpacity onPress={() => setSearchQuery("")}>
-                  <MaterialIcons
-                    name="close"
-                    size={20}
-                    color={THEME.textSecondary}
-                  />
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {hasNonVegItems && (
-              <View style={styles.dietaryFilterContainer}>
+          <View style={styles.splitLayout}>
+            {/* ── LEFT SIDEBAR ── */}
+            <View style={styles.sidebar}>
+              <Text style={styles.sidebarSectionTitle}>MENU</Text>
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.sidebarScroll}
+              >
                 <TouchableOpacity
                   style={[
-                    styles.dietFilterBtn,
-                    dietaryFilter === "all" && styles.dietFilterBtnActive,
+                    styles.sidebarItem,
+                    activeCategoryId === "all" && styles.sidebarItemActive,
                   ]}
-                  onPress={() => setDietaryFilter("all")}
+                  onPress={() => handleCategoryChange("all")}
                 >
-                  <Text
-                    style={[
-                      styles.dietFilterText,
-                      dietaryFilter === "all" && styles.dietFilterTextActive,
-                    ]}
-                  >
-                    All Items
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.dietFilterBtn,
-                    dietaryFilter === "veg" && styles.dietFilterBtnActiveVeg,
-                  ]}
-                  onPress={() => setDietaryFilter("veg")}
-                >
-                  <View style={styles.vegDot} />
-                  <Text
-                    style={[
-                      styles.dietFilterText,
-                      dietaryFilter === "veg" && styles.dietFilterTextActiveVeg,
-                    ]}
-                  >
-                    Veg Only
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.dietFilterBtn,
-                    dietaryFilter === "non-veg" &&
-                      styles.dietFilterBtnActiveNonVeg,
-                  ]}
-                  onPress={() => setDietaryFilter("non-veg")}
-                >
-                  <View style={styles.nonVegTriangle} />
-                  <Text
-                    style={[
-                      styles.dietFilterText,
-                      dietaryFilter === "non-veg" &&
-                        styles.dietFilterTextActiveNonVeg,
-                    ]}
-                  >
-                    Non-Veg
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {searchQuery.trim().length === 0 && (
-              <View style={styles.categorySliderContainer}>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.categorySliderContent}
-                >
-                  <TouchableOpacity
-                    style={[
-                      styles.catPill,
-                      activeCategoryId === "all" && styles.catPillActive,
-                    ]}
-                    onPress={() => setActiveCategoryId("all")}
-                  >
+                  <View style={styles.sidebarItemWrapper}>
                     <Text
                       style={[
-                        styles.catPillText,
-                        activeCategoryId === "all" && styles.catPillTextActive,
+                        styles.sidebarItemText,
+                        activeCategoryId === "all" &&
+                          styles.sidebarItemTextActive,
                       ]}
                     >
-                      All Categories
+                      All Menu
                     </Text>
-                  </TouchableOpacity>
+                  </View>
+                </TouchableOpacity>
 
-                  {categories.map((cat: any) => {
-                    if (cat.is_active === false || cat.is_active === 0)
-                      return null;
-                    const isActive = activeCategoryId === cat.id;
-                    return (
-                      <TouchableOpacity
-                        key={`cat-pill-${cat.id}`}
-                        style={[
-                          styles.catPill,
-                          isActive && styles.catPillActive,
-                        ]}
-                        onPress={() => setActiveCategoryId(cat.id)}
-                      >
+                {categories.map((cat: any) => {
+                  if (cat.is_active === false || cat.is_active === 0)
+                    return null;
+                  const isActive = activeCategoryId === cat.id;
+
+                  // Count out-of-stock in this category
+                  const catOutCount = (cat.items || []).filter(
+                    (i: any) => i.is_out_of_stock,
+                  ).length;
+
+                  return (
+                    <TouchableOpacity
+                      key={`cat-sidebar-${cat.id}`}
+                      style={[
+                        styles.sidebarItem,
+                        isActive && styles.sidebarItemActive,
+                      ]}
+                      onPress={() => handleCategoryChange(cat.id)}
+                    >
+                      <View style={styles.sidebarItemWrapper}>
+                        {isActive && <View style={styles.activeIndicatorDot} />}
                         <Text
                           style={[
-                            styles.catPillText,
-                            isActive && styles.catPillTextActive,
+                            styles.sidebarItemText,
+                            isActive && styles.sidebarItemTextActive,
                           ]}
                         >
                           {cat.name}
                         </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-            )}
+                      </View>
+                      {catOutCount > 0 && (
+                        <View style={styles.sidebarOutBadge}>
+                          <Text style={styles.sidebarOutBadgeText}>
+                            {catOutCount}
+                          </Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
 
-            <View style={styles.menuSection}>
-              {processedCategories.length === 0 ? (
-                <Text style={styles.emptySearchText}>
-                  No items match your criteria.
+            {/* ── RIGHT MAIN AREA ── */}
+            <View style={styles.mainArea}>
+              <ScrollView
+                ref={mainScrollViewRef}
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.mainAreaScroll}
+                keyboardShouldPersistTaps="handled"
+              >
+                <Text style={styles.heroTitle}>Hungry?</Text>
+                <Text style={styles.heroSubtitle}>
+                  Let's Eat Something Delicious 👋
                 </Text>
-              ) : activeCategoryId === "all" ? (
-                processedCategories.map((cat: any) => (
-                  <View
-                    key={`section-${cat.id}`}
-                    style={styles.categorySectionBlock}
+
+                {isOrderingLocked && (
+                  <View style={styles.bannerLocked}>
+                    <MaterialIcons
+                      name="lock"
+                      size={16}
+                      color={ANN.orange}
+                      style={{ marginRight: 6 }}
+                    />
+                    <Text
+                      style={{
+                        fontSize: 12,
+                        color: ANN.orange,
+                        fontWeight: "bold",
+                      }}
+                    >
+                      Ordering locked until host approves.
+                    </Text>
+                  </View>
+                )}
+
+                {/* ── OUT OF STOCK BANNER ── */}
+                {outOfStockCount > 0 && (
+                  <TouchableOpacity
+                    style={styles.stockBanner}
+                    onPress={() => setHideOutOfStock((prev) => !prev)}
+                    activeOpacity={0.8}
                   >
-                    <View style={styles.categorySectionHeader}>
-                      <Text style={styles.categorySectionTitle}>
-                        {cat.name}
-                      </Text>
+                    <View style={styles.stockBannerLeft}>
                       <MaterialIcons
-                        name="arrow-forward"
-                        size={18}
+                        name="info-outline"
+                        size={15}
+                        color="#B45309"
+                      />
+                      <Text style={styles.stockBannerText}>
+                        {outOfStockCount} item{outOfStockCount > 1 ? "s" : ""}{" "}
+                        currently unavailable
+                      </Text>
+                    </View>
+                    <View style={styles.stockBannerToggle}>
+                      <Text style={styles.stockBannerToggleText}>
+                        {hideOutOfStock ? "Show All" : "Hide"}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                )}
+
+                {/* ── SEARCH ── */}
+                <View style={styles.searchContainer}>
+                  <MaterialIcons
+                    name="search"
+                    size={20}
+                    color={THEME.textSecondary}
+                    style={{ marginRight: 8 }}
+                  />
+                  <TextInput
+                    style={styles.searchInput}
+                    placeholder="Search dishes..."
+                    placeholderTextColor="#94A3B8"
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                  />
+                  {searchQuery.length > 0 && (
+                    <TouchableOpacity onPress={() => setSearchQuery("")}>
+                      <MaterialIcons
+                        name="close"
+                        size={20}
                         color={THEME.textSecondary}
                       />
-                    </View>
+                    </TouchableOpacity>
+                  )}
+                </View>
 
-                    <ScrollView
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      contentContainerStyle={styles.sliderContentContainer}
-                      snapToInterval={CARD_WIDTH + 16}
-                      decelerationRate="fast"
+                {/* ── FILTERS ROW ── */}
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={{ marginBottom: 16 }}
+                >
+                  <View style={styles.dietaryFilterContainer}>
+                    {/* Dietary filters */}
+                    <TouchableOpacity
+                      style={[
+                        styles.dietFilterBtn,
+                        dietaryFilter === "all" && styles.dietFilterBtnActive,
+                      ]}
+                      onPress={() => setDietaryFilter("all")}
                     >
-                      {cat.items.map((item: any) =>
-                        renderMenuItemCard(item, false),
-                      )}
-
-                      <TouchableOpacity
-                        style={styles.viewMoreCard}
-                        onPress={() => setActiveCategoryId(cat.id)}
+                      <Text
+                        style={[
+                          styles.dietFilterText,
+                          dietaryFilter === "all" &&
+                            styles.dietFilterTextActive,
+                        ]}
                       >
-                        <View style={styles.viewMoreIconCircle}>
-                          <MaterialIcons
-                            name="arrow-forward"
-                            size={24}
-                            color={ANN.darkBlue}
-                          />
-                        </View>
-                        <Text style={styles.viewMoreText}>View All</Text>
-                        <Text style={styles.viewMoreSubText}>{cat.name}</Text>
-                      </TouchableOpacity>
-                    </ScrollView>
-                  </View>
-                ))
-              ) : (
-                processedCategories
-                  .filter((c: any) => c.id === activeCategoryId)
-                  .map((cat: any) => (
-                    <View
-                      key={`section-${cat.id}`}
-                      style={styles.categorySectionBlock}
-                    >
-                      <View style={styles.categorySectionHeader}>
-                        <Text style={styles.categorySectionTitle}>
-                          {cat.name}
-                        </Text>
-                      </View>
+                        All
+                      </Text>
+                    </TouchableOpacity>
 
-                      <View style={styles.gridContentContainer}>
-                        {cat.items.map((item: any) =>
-                          renderMenuItemCard(item, true),
-                        )}
-                      </View>
-
-                      {nextCategory && (
+                    {hasNonVegItems && (
+                      <>
                         <TouchableOpacity
-                          style={styles.nextCategoryBtn}
-                          onPress={() => setActiveCategoryId(nextCategory.id)}
+                          style={[
+                            styles.dietFilterBtn,
+                            dietaryFilter === "veg" &&
+                              styles.dietFilterBtnActiveVeg,
+                          ]}
+                          onPress={() => setDietaryFilter("veg")}
                         >
-                          <Text style={styles.nextCategoryBtnText}>
-                            Next: {nextCategory.name}
+                          <View style={styles.vegDot} />
+                          <Text
+                            style={[
+                              styles.dietFilterText,
+                              dietaryFilter === "veg" &&
+                                styles.dietFilterTextActiveVeg,
+                            ]}
+                          >
+                            Veg
                           </Text>
-                          <MaterialIcons
-                            name="arrow-forward"
-                            size={20}
-                            color={ANN.blue}
-                          />
                         </TouchableOpacity>
-                      )}
+
+                        <TouchableOpacity
+                          style={[
+                            styles.dietFilterBtn,
+                            dietaryFilter === "non-veg" &&
+                              styles.dietFilterBtnActiveNonVeg,
+                          ]}
+                          onPress={() => setDietaryFilter("non-veg")}
+                        >
+                          <View style={styles.nonVegTriangle} />
+                          <Text
+                            style={[
+                              styles.dietFilterText,
+                              dietaryFilter === "non-veg" &&
+                                styles.dietFilterTextActiveNonVeg,
+                            ]}
+                          >
+                            Non-Veg
+                          </Text>
+                        </TouchableOpacity>
+                      </>
+                    )}
+
+                    {/* Available Only toggle */}
+                    <TouchableOpacity
+                      style={[
+                        styles.dietFilterBtn,
+                        hideOutOfStock && styles.dietFilterBtnAvail,
+                      ]}
+                      onPress={() => setHideOutOfStock((prev) => !prev)}
+                    >
+                      <MaterialIcons
+                        name={
+                          hideOutOfStock
+                            ? "check-circle"
+                            : "radio-button-unchecked"
+                        }
+                        size={13}
+                        color={hideOutOfStock ? "#047857" : THEME.textSecondary}
+                        style={{ marginRight: 4 }}
+                      />
+                      <Text
+                        style={[
+                          styles.dietFilterText,
+                          hideOutOfStock && styles.dietFilterTextActiveVeg,
+                        ]}
+                      >
+                        Available Only
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </ScrollView>
+
+                {/* ── MENU GRID ── */}
+                <View style={styles.menuGridContainer}>
+                  {processedCategories.length === 0 ? (
+                    <View style={styles.emptyState}>
+                      <MaterialIcons
+                        name="search-off"
+                        size={40}
+                        color="#CBD5E1"
+                      />
+                      <Text style={styles.emptySearchText}>
+                        No items match your criteria.
+                      </Text>
                     </View>
-                  ))
-              )}
+                  ) : (
+                    processedCategories
+                      .filter(
+                        (c: any) =>
+                          activeCategoryId === "all" ||
+                          c.id === activeCategoryId,
+                      )
+                      .map((cat: any) => (
+                        <View
+                          key={`section-${cat.id}`}
+                          style={{ width: "100%", marginBottom: 10 }}
+                        >
+                          {activeCategoryId === "all" && (
+                            <View style={styles.inlineCategoryHeader}>
+                              <Text style={styles.inlineCategoryTitle}>
+                                {cat.name}
+                              </Text>
+                              <View style={styles.inlineCategoryLine} />
+                            </View>
+                          )}
+
+                          <View style={styles.gridRow}>
+                            {cat.items.map((item: any) =>
+                              renderMenuItemCard(item),
+                            )}
+                          </View>
+
+                          {activeCategoryId !== "all" && nextCategory && (
+                            <TouchableOpacity
+                              style={styles.nextCategoryBtn}
+                              onPress={() =>
+                                handleCategoryChange(nextCategory.id)
+                              }
+                            >
+                              <Text style={styles.nextCategoryBtnText}>
+                                Next: {nextCategory.name}
+                              </Text>
+                              <MaterialIcons
+                                name="arrow-forward"
+                                size={20}
+                                color={ANN.blue}
+                              />
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      ))
+                  )}
+                </View>
+              </ScrollView>
             </View>
-          </ScrollView>
+          </View>
         )}
 
+        {/* ── Cart Bar ── */}
         {cartTotalQty > 0 && !isOrderingLocked && (
           <View style={styles.cartBar}>
             <TouchableOpacity
@@ -809,6 +1067,7 @@ export default function MenuScreen() {
           </View>
         )}
 
+        {/* ── Requests Modal ── */}
         <Modal visible={showRequestsModal} transparent animationType="slide">
           <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>
@@ -950,19 +1209,24 @@ export default function MenuScreen() {
 }
 
 const styles = StyleSheet.create({
-  mainWrapper: { flex: 1, backgroundColor: THEME.background },
-  bgImage: {
-    ...StyleSheet.absoluteFillObject,
-    width: "100%",
-    height: "100%",
-    resizeMode: "cover",
-    opacity: 0.15,
-  },
+  // ── BACKGROUND ───────────────────────────────────────────────────────────
+  mainWrapper: { flex: 1, backgroundColor: "#F7F8FA" },
   bgOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(255, 255, 255, 0.85)",
+    backgroundColor: "transparent",
   },
-  container: { flex: 1, maxWidth: 480, width: "100%", alignSelf: "center" },
+  container: { flex: 1, maxWidth: 600, width: "100%", alignSelf: "center" },
+
+  // ── TOP BAR ──────────────────────────────────────────────────────────────
+  topBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: 16,
+    backgroundColor: "#FFF",
+    borderBottomWidth: 1,
+    borderColor: "rgba(0,0,0,0.05)",
+  },
   headerCenter: {
     flex: 1,
     alignItems: "center",
@@ -992,15 +1256,6 @@ const styles = StyleSheet.create({
     color: THEME.textSecondary,
     marginHorizontal: 2,
   },
-  topBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: 16,
-    backgroundColor: "rgba(255, 255, 255, 0.6)",
-    borderBottomWidth: 1,
-    borderColor: "rgba(0,0,0,0.05)",
-  },
   iconBtn: {
     width: 40,
     height: 40,
@@ -1020,66 +1275,141 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   hostBadgeText: { color: "#FFF", fontWeight: "bold", fontSize: 14 },
-  scrollContent: { paddingBottom: 100 },
-  banner: {
+
+  // ── SPLIT LAYOUT ─────────────────────────────────────────────────────────
+  splitLayout: { flex: 1, flexDirection: "row" },
+
+  // ── SIDEBAR ──────────────────────────────────────────────────────────────
+  sidebar: {
+    width: 100,
+    backgroundColor: "#FFF",
+    borderRightWidth: 1,
+    borderColor: "rgba(0,0,0,0.03)",
+    paddingTop: 16,
+  },
+  sidebarSectionTitle: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: "#A0AEC0",
+    paddingHorizontal: 16,
+    marginBottom: 16,
+    letterSpacing: 0.5,
+  },
+  sidebarScroll: { paddingBottom: 100 },
+  sidebarItem: {
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    marginHorizontal: 8,
+    marginBottom: 4,
+    borderRadius: 16,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: "rgba(220, 252, 231, 0.8)",
-    borderWidth: 1,
-    borderColor: "rgba(76, 175, 80, 0.3)",
-    padding: 16,
-    marginHorizontal: 16,
-    borderRadius: 12,
+  },
+  sidebarItemWrapper: { flexDirection: "row", alignItems: "center", flex: 1 },
+  sidebarItemActive: { backgroundColor: ANN.darkBlue },
+  activeIndicatorDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: ANN.red,
+    marginRight: 6,
+    marginTop: 2,
+  },
+  sidebarItemText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#4A5568",
+    flexShrink: 1,
+    flexWrap: "wrap",
+  },
+  sidebarItemTextActive: { color: "#FFF", fontWeight: "bold" },
+  // Out of stock count bubble in sidebar
+  sidebarOutBadge: {
+    backgroundColor: "#FEE2E2",
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  sidebarOutBadgeText: { fontSize: 9, fontWeight: "800", color: "#DC2626" },
+
+  // ── MAIN AREA ─────────────────────────────────────────────────────────────
+  mainArea: { flex: 1 },
+  mainAreaScroll: { padding: 16, paddingBottom: 120 },
+  heroTitle: { fontSize: 28, fontWeight: "900", color: ANN.darkBlue },
+  heroSubtitle: {
+    fontSize: 14,
+    color: "#718096",
+    marginTop: 4,
     marginBottom: 16,
   },
+
+  // ── BANNERS ───────────────────────────────────────────────────────────────
   bannerLocked: {
-    backgroundColor: "rgba(255, 244, 236, 0.8)",
-    borderColor: "rgba(254, 154, 84, 0.4)",
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: ANN.orangeLight,
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 12,
   },
-  bannerTitle: { fontSize: 14, fontWeight: "bold" },
-  bannerSub: { fontSize: 12, color: THEME.textSecondary, marginTop: 4 },
+
+  // ── OUT OF STOCK BANNER ───────────────────────────────────────────────────
+  stockBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#FFFBEB",
+    borderWidth: 1,
+    borderColor: "#FCD34D",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 12,
+  },
+  stockBannerLeft: { flexDirection: "row", alignItems: "center", gap: 6 },
+  stockBannerText: { fontSize: 12, fontWeight: "600", color: "#92400E" },
+  stockBannerToggle: {
+    backgroundColor: "#FEF3C7",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  stockBannerToggleText: { fontSize: 11, fontWeight: "700", color: "#B45309" },
+
+  // ── SEARCH ────────────────────────────────────────────────────────────────
   searchContainer: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "rgba(255, 255, 255, 0.7)",
-    marginHorizontal: 16,
+    backgroundColor: "#FFF",
     marginBottom: 12,
     paddingHorizontal: 12,
     borderRadius: 12,
     height: 44,
     borderWidth: 1,
-    borderColor: "rgba(42, 71, 149, 0.2)",
+    borderColor: "rgba(0,0,0,0.05)",
   },
   searchInput: {
     flex: 1,
     height: "100%",
     color: THEME.textPrimary,
-    fontSize: 15,
+    fontSize: 14,
   },
-  emptySearchText: {
-    color: THEME.textSecondary,
-    fontStyle: "italic",
-    marginTop: 8,
-    fontSize: 15,
-    marginBottom: 20,
-    paddingHorizontal: 16,
-  },
-  dietaryFilterContainer: {
-    flexDirection: "row",
-    marginHorizontal: 16,
-    marginBottom: 16,
-    gap: 8,
-  },
+
+  // ── FILTERS ───────────────────────────────────────────────────────────────
+  dietaryFilterContainer: { flexDirection: "row", gap: 8 },
   dietFilterBtn: {
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: 6,
     paddingHorizontal: 12,
     borderRadius: 20,
+    backgroundColor: "#FFF",
     borderWidth: 1,
-    borderColor: "rgba(42, 71, 149, 0.2)",
-    backgroundColor: "rgba(255, 255, 255, 0.6)",
+    borderColor: "rgba(0,0,0,0.05)",
   },
   dietFilterBtnActive: {
     backgroundColor: ANN.darkBlue,
@@ -1093,6 +1423,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#fef2f2",
     borderColor: "#ef4444",
   },
+  dietFilterBtnAvail: { backgroundColor: "#ecfdf5", borderColor: "#10b981" },
   dietFilterText: {
     fontSize: 12,
     fontWeight: "700",
@@ -1101,210 +1432,13 @@ const styles = StyleSheet.create({
   dietFilterTextActive: { color: "#FFF" },
   dietFilterTextActiveVeg: { color: "#047857" },
   dietFilterTextActiveNonVeg: { color: "#b91c1c" },
-  categorySliderContainer: { marginBottom: 16 },
-  categorySliderContent: { paddingHorizontal: 16, gap: 10 },
-  catPill: {
-    backgroundColor: "rgba(238, 242, 251, 0.8)",
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: "rgba(42, 71, 149, 0.2)",
-  },
-  catPillActive: { backgroundColor: ANN.orange, borderColor: ANN.orange },
-  catPillText: { fontSize: 14, fontWeight: "700", color: ANN.darkBlue },
-  catPillTextActive: { color: "#ffffff" },
-  menuSection: { paddingBottom: 20 },
-  categorySectionBlock: { marginBottom: 24 },
-  categorySectionHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    marginBottom: 12,
-  },
-  categorySectionTitle: {
-    fontSize: 20,
-    fontWeight: "bold",
-    color: THEME.textPrimary,
-  },
-  sliderContentContainer: { paddingHorizontal: 16, gap: 16 },
-  gridContentContainer: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-  },
-  gridCard: { width: "48%", marginBottom: 16 },
-  sliderCard: {
-    width: CARD_WIDTH,
-    backgroundColor: "rgba(255, 255, 255, 0.75)",
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "rgba(42, 71, 149, 0.15)",
-    overflow: "hidden",
-    ...Platform.select({
-      web: { boxShadow: "0px 4px 12px rgba(0,0,0,0.06)" } as any,
-      default: {
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.08,
-        shadowRadius: 6,
-        elevation: 3,
-      },
-    }),
-  },
-  sliderImageContainer: {
-    width: "100%",
-    height: 130,
-    position: "relative",
-    backgroundColor: "rgba(0,0,0,0.03)",
-  },
-  sliderImage: { width: "100%", height: "100%", resizeMode: "cover" },
-  sliderBadge: {
-    position: "absolute",
-    top: 10,
-    right: 10,
-    backgroundColor: "rgba(255,255,255,0.9)",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  sliderBadgeText: {
-    fontSize: 9,
-    fontWeight: "900",
-    color: ANN.darkBlue,
-    letterSpacing: 0.5,
-  },
-  sliderContent: { padding: 12, flex: 1, justifyContent: "space-between" },
-  sliderTitleRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 4,
-  },
-  sliderItemName: {
-    fontSize: 15,
-    fontWeight: "bold",
-    color: ANN.darkBlue,
-    flex: 1,
-    marginRight: 6,
-  },
-  sliderItemDesc: {
-    fontSize: 11,
-    color: THEME.textSecondary,
-    lineHeight: 16,
-    marginBottom: 8,
-  },
-  sliderFooter: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: 8,
-  },
-  sliderPrice: { fontSize: 16, fontWeight: "900", color: ANN.red },
-  sliderAddBtn: {
-    backgroundColor: ANN.orange,
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  sliderQtyControls: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.9)",
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: ANN.orange,
-    height: 32,
-    overflow: "hidden",
-  },
-  sliderQtyBtn: {
-    width: 28,
-    height: "100%",
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: ANN.orangeLight,
-  },
-  sliderQtyText: {
-    fontWeight: "bold",
-    fontSize: 14,
-    color: ANN.darkBlue,
-    width: 20,
-    textAlign: "center",
-  },
-  viewMoreCard: {
-    width: CARD_WIDTH * 0.6,
-    backgroundColor: "rgba(238, 242, 251, 0.8)",
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "rgba(42, 71, 149, 0.2)",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 16,
-    marginLeft: 4,
-  },
-  viewMoreIconCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: "rgba(255,255,255,0.8)",
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: "rgba(42, 71, 149, 0.15)",
-  },
-  viewMoreText: {
-    fontSize: 14,
-    fontWeight: "bold",
-    color: ANN.darkBlue,
-    textAlign: "center",
-  },
-  viewMoreSubText: {
-    fontSize: 11,
-    color: THEME.textSecondary,
-    textAlign: "center",
-    marginTop: 4,
-  },
-  nextCategoryBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: ANN.blueLight,
-    padding: 14,
-    borderRadius: 12,
-    marginHorizontal: 16,
-    marginTop: 16,
-    marginBottom: 24,
-    gap: 8,
-    borderWidth: 1,
-    borderColor: ANN.blue + "40",
-  },
-  nextCategoryBtnText: { color: ANN.blue, fontWeight: "bold", fontSize: 16 },
-  vegDotSmall: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+  vegDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
     backgroundColor: "#10b981",
-    marginTop: 4,
+    marginRight: 4,
   },
-  nonVegTriangleSmall: {
-    width: 0,
-    height: 0,
-    backgroundColor: "transparent",
-    borderStyle: "solid",
-    borderLeftWidth: 4,
-    borderRightWidth: 4,
-    borderBottomWidth: 8,
-    borderLeftColor: "transparent",
-    borderRightColor: "transparent",
-    borderBottomColor: "#ef4444",
-    marginTop: 4,
-  },
-  vegDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#10b981" },
   nonVegTriangle: {
     width: 0,
     height: 0,
@@ -1316,10 +1450,248 @@ const styles = StyleSheet.create({
     borderLeftColor: "transparent",
     borderRightColor: "transparent",
     borderBottomColor: "#ef4444",
+    marginRight: 4,
   },
+
+  // ── CATEGORY HEADER ───────────────────────────────────────────────────────
+  inlineCategoryHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+    marginTop: 8,
+    gap: 10,
+  },
+  inlineCategoryTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: ANN.darkBlue,
+    letterSpacing: -0.3,
+  },
+  inlineCategoryLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "rgba(42,71,149,0.12)",
+  },
+
+  // ── GRID & CARDS ──────────────────────────────────────────────────────────
+  menuGridContainer: { width: "100%" },
+  gridRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+  },
+
+  gridCard: {
+    width: "48%",
+    backgroundColor: "#FFF",
+    borderRadius: 16,
+    padding: 10,
+    marginBottom: 16,
+    ...Platform.select({
+      web: { boxShadow: "0px 2px 8px rgba(0,0,0,0.04)" } as any,
+      default: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+        elevation: 2,
+      },
+    }),
+  },
+
+  // Image wrapper for overlay support
+  cardImageWrapper: { position: "relative", marginBottom: 10 },
+  cardImage: {
+    width: "100%",
+    height: 100,
+    borderRadius: 12,
+    backgroundColor: "#F7F8FA",
+    resizeMode: "cover",
+  },
+  cardImageGrayscale: { opacity: 0.5 },
+
+  // SOLD OUT overlay on image
+  outOfStockOverlay: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    borderBottomLeftRadius: 12,
+    borderBottomRightRadius: 12,
+    paddingVertical: 5,
+    alignItems: "center",
+  },
+  outOfStockOverlayText: {
+    color: "#FFF",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 1.2,
+  },
+
+  // Popular badge on image
+  popularBadge: {
+    position: "absolute",
+    top: 6,
+    left: 6,
+    backgroundColor: "rgba(254,154,84,0.92)",
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  popularBadgeText: { fontSize: 9, fontWeight: "700", color: "#FFF" },
+
+  cardContent: { flex: 1 },
+
+  // Veg/NonVeg indicator (FSSAI style box)
+  typeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 5,
+    gap: 5,
+  },
+  typeIndicator: {
+    width: 14,
+    height: 14,
+    borderRadius: 2,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  vegIndicator: { borderColor: "#16A34A" },
+  nonVegIndicator: { borderColor: "#DC2626" },
+  typeInnerDot: { width: 6, height: 6, borderRadius: 3 },
+  vegDotInner: { backgroundColor: "#16A34A" },
+  nonVegDotInner: { backgroundColor: "#DC2626" },
+  typeLabel: { fontSize: 10, color: "#94A3B8", fontWeight: "600" },
+
+  cardTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: ANN.darkBlue,
+    marginBottom: 3,
+    lineHeight: 17,
+  },
+  cardDesc: { fontSize: 10, color: "#9CA3AF", marginBottom: 6, lineHeight: 14 },
+
+  // ── STOCK BADGES ──────────────────────────────────────────────────────────
+  outOfStockBadge: {
+    alignSelf: "flex-start",
+    backgroundColor: "#FEE2E2",
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    marginBottom: 6,
+  },
+  outOfStockBadgeText: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: "#DC2626",
+    letterSpacing: 0.3,
+  },
+
+  limitedStockBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    backgroundColor: "#FFFBEB",
+    borderWidth: 1,
+    borderColor: "#FCD34D",
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    marginBottom: 6,
+    gap: 3,
+  },
+  limitedStockBadgeText: { fontSize: 10, fontWeight: "700", color: "#92400E" },
+
+  // Card bottom row: price + stepper
+  cardBottomRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 2,
+  },
+  cardPrice: { fontSize: 15, fontWeight: "900", color: ANN.darkBlue },
+
+  // Stepper
+  stepperContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#F8F9FA",
+    borderRadius: 24,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: "#EDF2F7",
+  },
+  stepperBtn: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#FFF",
+  },
+  stepperBtnDark: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: ANN.darkBlue,
+  },
+  stepperBtnDisabled: { backgroundColor: "#9CA3AF" },
+  stepperQty: {
+    fontSize: 13,
+    fontWeight: "bold",
+    color: "#9CA3AF",
+    minWidth: 18,
+    textAlign: "center",
+  },
+  stepperQtyActive: { color: ANN.darkBlue },
+  stepperQtyMax: { fontSize: 9, color: "#94A3B8", fontWeight: "400" },
+
+  // Notify me button (for out of stock)
+  notifyBtn: {
+    backgroundColor: ANN.orangeLight,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: ANN.orange + "40",
+  },
+  notifyBtnText: { fontSize: 11, fontWeight: "700", color: ANN.red },
+
+  // ── EMPTY STATE ───────────────────────────────────────────────────────────
+  emptyState: { alignItems: "center", paddingTop: 40 },
+  emptySearchText: {
+    color: THEME.textSecondary,
+    fontStyle: "italic",
+    marginTop: 12,
+    fontSize: 14,
+  },
+
+  // ── NEXT CATEGORY ─────────────────────────────────────────────────────────
+  nextCategoryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: ANN.blueLight,
+    padding: 14,
+    borderRadius: 12,
+    marginTop: 8,
+    marginBottom: 16,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: ANN.blue + "40",
+  },
+  nextCategoryBtnText: { color: ANN.blue, fontWeight: "bold", fontSize: 14 },
+
+  // ── CART BAR ──────────────────────────────────────────────────────────────
   cartBar: { position: "absolute", bottom: 16, left: 16, right: 16 },
   cartButton: {
-    backgroundColor: "rgba(42, 71, 149, 0.95)",
+    backgroundColor: ANN.darkBlue,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
@@ -1352,6 +1724,8 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     marginRight: 4,
   },
+
+  // ── MODALS ────────────────────────────────────────────────────────────────
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(28,28,30,0.5)",

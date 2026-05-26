@@ -1,6 +1,6 @@
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -46,7 +46,6 @@ export default function CartTab() {
     clearSession,
   } = useSession();
 
-  // Extract type
   const { type } = useLocalSearchParams<{ type?: string }>();
   const isRoom = type === "room";
 
@@ -56,13 +55,20 @@ export default function CartTab() {
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
 
+  // Dynamic stock verification errors array for multi-customer synchronization
+  const [stockErrors, setStockErrors] = useState<Record<number, string>>({});
+
   const currency = menuData?.restaurant?.currency_symbol || "₹";
   const isPayFirst = menuData?.restaurant?.is_pay_first === true;
   const upiId = menuData?.restaurant?.upi_id || "";
   const restaurantName = menuData?.restaurant?.name || "Restaurant";
   const tableNum = menuData?.table?.number || tableData?.tId || "?";
 
-  // Updated UPI String to handle Rooms vs Tables
+  const flatMenuItems = useMemo(() => {
+    if (!menuData?.categories) return [];
+    return menuData.categories.flatMap((cat: any) => cat.items || []);
+  }, [menuData]);
+
   const pa = encodeURIComponent(upiId);
   const pn = encodeURIComponent(restaurantName);
   const tn = encodeURIComponent(
@@ -80,6 +86,33 @@ export default function CartTab() {
   }, [cart, itemNotes, orderNote]);
 
   const handleProceed = () => {
+    let stockViolationFound = false;
+    const currentStockErrors: Record<number, string> = {};
+
+    Object.entries(cart).forEach(([idStr, item]) => {
+      const id = Number(idStr);
+      if (item.qty <= 0) return;
+
+      const originalItem = flatMenuItems.find((m: any) => m.id === id);
+      if (originalItem && originalItem.stock_quantity !== null) {
+        if (item.qty > parseInt(originalItem.stock_quantity)) {
+          stockViolationFound = true;
+          currentStockErrors[id] =
+            `Only ${originalItem.stock_quantity} units available`;
+        }
+      }
+    });
+
+    if (stockViolationFound) {
+      setStockErrors(currentStockErrors);
+      Alert.alert(
+        "Stock Availability Alert 📦",
+        "Some items in your cart have exceeded kitchen availability limits. Please reduce quantities to match available portions.",
+        [{ text: "Review Items", style: "default" }],
+      );
+      return;
+    }
+
     if (isPayFirst) {
       setShowPaymentModal(true);
     } else {
@@ -117,20 +150,22 @@ export default function CartTab() {
         orderNote.trim(),
         idempotencyKey,
         paymentMethod,
-        tableData.type || "table", // 👈 EXPLICITLY ADDED TYPE HERE
+        tableData.type || "table",
       );
 
+      // Clean success parameters entirely if order goes through cleanly
       clearCart();
       setItemNotes({});
       setOrderNote("");
       setPendingKey(null);
+      setStockErrors({});
       setShowPaymentModal(false);
 
       setTimeout(() => {
         router.push("/(tabs)/orders");
       }, 100);
     } catch (err: any) {
-      console.error("Order error:", err);
+      console.error("Order placement crash sequence caught:", err);
 
       if (
         err?.status === 403 ||
@@ -146,9 +181,61 @@ export default function CartTab() {
         return;
       }
 
+      const errorMessage = err?.data?.message || err.message || "";
+
+      // 👇 🌟 SWIGGY / ZOMATO STYLE SWAP ALGORITHM FOR CONCURRENT PARTIAL CHECKOUTS 🌟 👇
+      if (
+        err?.status === 422 ||
+        errorMessage.toLowerCase().includes("stock") ||
+        errorMessage.toLowerCase().includes("sold out")
+      ) {
+        const newStockErrors: Record<number, string> = {};
+        let itemsStillInCart = false;
+        let soldOutItemName = "An item";
+
+        // Parse through current local client state cart rows
+        Object.entries(cart).forEach(([idStr, cartItem]) => {
+          const id = Number(idStr);
+          if (cartItem.qty <= 0) return;
+
+          // Cross reference error message substring contents to precisely target the conflict row
+          if (
+            errorMessage.toLowerCase().includes(cartItem.name.toLowerCase())
+          ) {
+            newStockErrors[id] = `⚠️ Sorry, ${cartItem.name} just sold out!`;
+            soldOutItemName = cartItem.name;
+            // Leave this item inside the cart explicitly, tagged with the active error state layout
+            itemsStillInCart = true;
+          } else {
+            // Success row: Automatically drop successfully processed nodes out of cart space
+            updateCart(id, -cartItem.qty, cartItem.price, cartItem.name);
+          }
+        });
+
+        setStockErrors(newStockErrors);
+        setShowPaymentModal(false);
+
+        // Notify client with exact contextual breakdown without failing available elements
+        Alert.alert(
+          "Kitchen Update 🥣",
+          `Another table just ordered the last portion of "${soldOutItemName}". The remaining dishes have been successfully sent to the kitchen!`,
+          [
+            {
+              text: "Check Orders",
+              onPress: () => router.push("/(tabs)/orders"),
+            },
+            {
+              text: "Modify Cart",
+              style: "cancel",
+            },
+          ],
+        );
+        return;
+      }
+
       Alert.alert(
         "Order Failed",
-        err?.data?.message || err.message || "Network error. Please try again.",
+        errorMessage || "Network error. Please try again.",
       );
     } finally {
       setPlacing(false);
@@ -239,8 +326,29 @@ export default function CartTab() {
               const id = Number(idStr);
               if (item.qty <= 0) return null;
 
+              const originalItem = flatMenuItems.find((m: any) => m.id === id);
+              const isUnlimited =
+                originalItem?.stock_quantity === null ||
+                originalItem?.stock_quantity === undefined;
+              const availableStock = isUnlimited
+                ? Infinity
+                : parseInt(originalItem.stock_quantity);
+              const isLowStock =
+                !isUnlimited &&
+                availableStock <=
+                  (parseInt(originalItem.low_stock_threshold) || 3);
+              const runtimeStockError = stockErrors[id];
+
               return (
-                <View key={id} style={styles.cartItemCard}>
+                <View
+                  key={id}
+                  style={[
+                    styles.cartItemCard,
+                    runtimeStockError
+                      ? { borderColor: THEME.danger, borderWidth: 1.5 }
+                      : null,
+                  ]}
+                >
                   <View style={styles.itemTopRow}>
                     <View style={{ flex: 1, paddingRight: 10 }}>
                       <Text style={styles.itemName} numberOfLines={2}>
@@ -250,6 +358,35 @@ export default function CartTab() {
                         {currency}
                         {(item.price * item.qty).toFixed(2)}
                       </Text>
+
+                      {/* 👇 REAL-TIME VISUAL CONFLICT DEPLOYMENT BADGE 👇 */}
+                      {runtimeStockError ? (
+                        <Text
+                          style={{
+                            fontSize: 11,
+                            color: THEME.danger,
+                            fontWeight: "900",
+                            marginTop: 4,
+                          }}
+                        >
+                          {runtimeStockError}
+                        </Text>
+                      ) : (
+                        !isUnlimited && (
+                          <Text
+                            style={[
+                              styles.proStockBadge,
+                              isLowStock
+                                ? { color: ANN.red }
+                                : { color: "#16a34a" },
+                            ]}
+                          >
+                            {availableStock <= 0
+                              ? "⚠️ Out of Stock"
+                              : `📦 Stock Left: ${availableStock} units`}
+                          </Text>
+                        )
+                      )}
                     </View>
                     <View style={styles.controlsContainer}>
                       <TouchableOpacity
@@ -262,9 +399,16 @@ export default function CartTab() {
                       </TouchableOpacity>
                       <View style={styles.qtySelector}>
                         <TouchableOpacity
-                          onPress={() =>
-                            updateCart(id, -1, item.price, item.name)
-                          }
+                          onPress={() => {
+                            if (stockErrors[id]) {
+                              setStockErrors((prev) => {
+                                const n = { ...prev };
+                                delete n[id];
+                                return n;
+                              });
+                            }
+                            updateCart(id, -1, item.price, item.name);
+                          }}
                           style={styles.qtyBtn}
                         >
                           <Ionicons
@@ -275,9 +419,23 @@ export default function CartTab() {
                         </TouchableOpacity>
                         <Text style={styles.qtyText}>{item.qty}</Text>
                         <TouchableOpacity
-                          onPress={() =>
-                            updateCart(id, 1, item.price, item.name)
-                          }
+                          onPress={() => {
+                            if (!isUnlimited && item.qty >= availableStock) {
+                              Alert.alert(
+                                "Stock Boundary",
+                                `The kitchen only has ${availableStock} units left right now.`,
+                              );
+                              return;
+                            }
+                            if (stockErrors[id]) {
+                              setStockErrors((prev) => {
+                                const n = { ...prev };
+                                delete n[id];
+                                return n;
+                              });
+                            }
+                            updateCart(id, 1, item.price, item.name);
+                          }}
                           style={styles.qtyBtn}
                         >
                           <Ionicons name="add" size={18} color={ANN.darkBlue} />
@@ -588,13 +746,14 @@ const styles = StyleSheet.create({
     color: ANN.darkBlue,
     marginBottom: 6,
   },
-  itemPrice: { fontSize: 16, fontWeight: "900", color: ANN.red },
+  itemPrice: { fontSize: 16, color: ANN.red, fontWeight: "900" },
+  proStockBadge: { fontSize: 11, fontWeight: "700", marginTop: 4 },
   controlsContainer: { flexDirection: "row", alignItems: "center", gap: 12 },
   deleteItemBtn: { padding: 6, backgroundColor: ANN.redLight, borderRadius: 8 },
   qtySelector: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.9)",
+    backgroundColor: "rgba(255, 255, 255, 0.9)",
     borderRadius: 10,
     padding: 2,
     borderWidth: 1,
@@ -617,7 +776,7 @@ const styles = StyleSheet.create({
   noteInputContainer: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.6)",
+    backgroundColor: "rgba(255, 255, 255, 0.6)",
     borderRadius: 10,
     paddingHorizontal: 12,
     borderWidth: 1,
@@ -635,7 +794,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: "rgba(255,255,255,0.95)",
+    backgroundColor: "rgba(255, 255, 255, 0.95)",
     padding: 20,
     paddingBottom: Platform.OS === "ios" ? 30 : 20,
     borderTopLeftRadius: 24,

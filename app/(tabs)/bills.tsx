@@ -1,7 +1,25 @@
+/**
+ * app/(tabs)/bills.tsx
+ *
+ * Fixes applied:
+ *   1. RAZORPAY WEB: Import changed from `react-native-razorpay` to
+ *      `../../services/razorpay` which resolves to the correct .web.ts or
+ *      .native.ts shim automatically via Metro bundler.
+ *
+ *   2. EXPO-PRINT / EXPO-SHARING: These are now lazy-imported inside the
+ *      native branch of handleDownloadBill so they are never evaluated on web.
+ *
+ *   3. ACTIVE METHOD LOGIC: Fixed so that payment_method values of "online",
+ *      "pending", or anything other than "cash" correctly shows the UPI /
+ *      Razorpay tab instead of rendering nothing.
+ *
+ *   4. VARIABLE ORDERING: tableNum, restaurantName, restaurantLogo,
+ *      restaurantAddress, displayHostName moved to top of component so they
+ *      are in scope when handleRazorpayPayment is defined.
+ */
+
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
-import * as Print from "expo-print";
 import { router, useLocalSearchParams } from "expo-router";
-import * as Sharing from "expo-sharing";
 import React, {
   useCallback,
   useEffect,
@@ -24,8 +42,13 @@ import {
 } from "react-native";
 import QRCode from "react-native-qrcode-svg";
 
+// FIX 1: Use platform-aware shim instead of react-native-razorpay directly.
+// Metro resolves this to razorpay.web.ts on web and razorpay.native.ts on mobile.
+import RazorpayCheckout from "../../services/razorpay";
+
 import { THEME } from "../../constants/theme";
 import { useSession } from "../../context/SessionContext";
+import { apiCall } from "../../services/api";
 import { initEcho } from "../../services/echo";
 import { OrderService } from "../../services/order.service";
 import { SessionService } from "../../services/session.service";
@@ -53,28 +76,34 @@ export default function BillsTab() {
     clearSession,
   } = useSession();
 
-  // 👇 Extract type parameter from the URL context
   const { billRequested } = useLocalSearchParams<{ billRequested?: string }>();
-
-  // 👇 FIX: Extract type directly from the globally persisted tableData context
   const isRoom = tableData?.type === "room";
+
+  // ─── FIX 4: Derived variables moved to the top so handleRazorpayPayment
+  //            can safely close over them. ────────────────────────────────
+  const currency = menuData?.restaurant?.currency_symbol || "₹";
+  const restaurantName = menuData?.restaurant?.name || "Restaurant Bill";
+  const restaurantLogo = menuData?.restaurant?.logo || null;
+  const restaurantAddress = menuData?.restaurant?.address || "";
+  const tableNum = menuData?.table?.number || tableData?.tId || "-";
+  const displayHostName = isPrimary
+    ? customerName
+    : menuData?.session?.host_name || "Customer";
+  const sessionId =
+    menuData?.session?.id || menuData?.session?.session_id || tableData?.tId;
+  // ─────────────────────────────────────────────────────────────────────────
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<
     "connecting" | "live" | "offline"
   >("connecting");
   const [paymentData, setPaymentData] = useState<any>(null);
-
   const [billingSummary, setBillingSummary] = useState<any>(null);
 
   const echoRef = useRef<any>(null);
-  const processedEventsRef = useRef<Set<string>>(new Set());
-
-  const currency = menuData?.restaurant?.currency_symbol || "₹";
-  const sessionId =
-    menuData?.session?.id || menuData?.session?.session_id || tableData?.tId;
 
   const mergeOrders = (incomingOrders: any[]) => {
     setOrders((prev) => {
@@ -113,7 +142,6 @@ export default function BillsTab() {
         const incomingOrders = Array.isArray(data) ? data : data.orders || [];
         mergeOrders(incomingOrders);
         if (data.payment) setPaymentData(data.payment);
-
         if (data.billing_summary) setBillingSummary(data.billing_summary);
       } catch (e: any) {
         if (e.name !== "AbortError") console.error("Failed to fetch orders", e);
@@ -187,7 +215,7 @@ export default function BillsTab() {
         if (!isMounted) return;
         Alert.alert(
           "Thank You!",
-          `Your ${isRoom ? "room" : "table"} session has been closed. See you again!`, // 👇 Dynamic alert text
+          `Your ${isRoom ? "room" : "table"} session has been closed. See you again!`,
         );
         await clearSession();
         router.replace("/");
@@ -241,6 +269,88 @@ export default function BillsTab() {
     }
   };
 
+  // ─── RAZORPAY PAYMENT HANDLER ────────────────────────────────────────────
+  // All variables it closes over (tableNum, restaurantName, etc.) are now
+  // declared above this function so there is no temporal-dead-zone risk.
+  const handleRazorpayPayment = async () => {
+    if (!paymentData?.id || !sessionToken) return;
+    setIsProcessingPayment(true);
+
+    try {
+      // 1. Ask backend to create a Razorpay order securely
+      const orderResponse = await apiCall("/payment/razorpay/create", {
+        method: "POST",
+        body: JSON.stringify({ payment_id: paymentData.id }),
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${sessionToken}`,
+        },
+      });
+
+      // 2. Open Razorpay checkout (native SDK on mobile, checkout.js on web)
+      const options = {
+        description: `Bill for ${isRoom ? "Room" : "Table"} ${tableNum}`,
+        image: restaurantLogo || "https://annsathi.com/logo.png",
+        currency: orderResponse.currency,
+        key: orderResponse.key,
+        amount: orderResponse.amount,
+        name: restaurantName,
+        order_id: orderResponse.razorpay_order_id,
+        theme: { color: ANN.darkBlue },
+        prefill: { name: displayHostName },
+      };
+
+      const data = await RazorpayCheckout.open(options);
+
+      // 3. Verify the payment with the backend
+      await apiCall("/payment/razorpay/verify", {
+        method: "POST",
+        body: JSON.stringify({
+          payment_id: paymentData.id,
+          razorpay_order_id: data.razorpay_order_id,
+          razorpay_payment_id: data.razorpay_payment_id,
+          razorpay_signature: data.razorpay_signature,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${sessionToken}`,
+        },
+      });
+
+      if (Platform.OS === "web") {
+        window.alert("Payment Received! We are confirming with the kitchen.");
+      } else {
+        Alert.alert(
+          "Payment Received",
+          "We are confirming your payment with the kitchen. The screen will update automatically.",
+        );
+      }
+
+      fetchOrders();
+    } catch (error: any) {
+      if (error.code) {
+        // Native SDK / web modal error (user cancelled, network error in SDK)
+        if (Platform.OS === "web") {
+          window.alert("Payment Cancelled. Transaction was not completed.");
+        } else {
+          Alert.alert("Payment Cancelled", "Transaction was not completed.");
+        }
+      } else {
+        // Backend API error (fraud attempt, expired order, etc.)
+        const msg =
+          error.message || "Could not process payment. Please try again.";
+        if (Platform.OS === "web") {
+          window.alert(msg);
+        } else {
+          Alert.alert("Notice", msg);
+        }
+      }
+    } finally {
+      setIsProcessingPayment(false);
+    }
+  };
+  // ─────────────────────────────────────────────────────────────────────────
+
   const { consolidatedItems, rawSubtotal, totalItemsCount } = useMemo(() => {
     const itemMap = new Map();
     let total = 0;
@@ -284,31 +394,17 @@ export default function BillsTab() {
   const finalDiscount = parseFloat(paymentData?.discount_amount || 0);
   const finalTax = parseFloat(paymentData?.tax_amount || 0);
   const finalExtraCharges = parseFloat(paymentData?.extra_charges || 0);
-
   const calculatedGrandTotal =
     finalSubtotal - finalDiscount + finalTax + finalExtraCharges;
-
   const amountPaid = parseFloat(billingSummary?.amount_paid || 0);
   const amountDue = isBillPaid ? 0 : parseFloat(paymentData?.amount || 0);
 
-  const restaurantName = menuData?.restaurant?.name || "Restaurant Bill";
-  const restaurantLogo = menuData?.restaurant?.logo || null;
-  const restaurantAddress = menuData?.restaurant?.address || "";
-  const tableNum = menuData?.table?.number || tableData?.tId || "-";
-  const displayHostName = isPrimary
-    ? customerName
-    : menuData?.session?.host_name || "Customer";
-
   const upiId = paymentData?.upi_id || menuData?.restaurant?.upi_id || "";
-
   const pa = encodeURIComponent(upiId);
   const pn = encodeURIComponent(restaurantName);
-
-  // 👇 Dynamic UPI Reference string based on Room vs Table
   const tn = encodeURIComponent(
     `Bill for ${isRoom ? "Room" : "Table"} ${tableNum}`,
   );
-
   const tr = encodeURIComponent(
     paymentData?.transaction_reference || `TXN${Date.now()}`,
   );
@@ -317,6 +413,9 @@ export default function BillsTab() {
   const cu = "INR";
   const upiString = `upi://pay?pa=${pa}&pn=${pn}&tr=${tr}&tn=${tn}&mc=${mc}&am=${am}&cu=${cu}`;
 
+  // ─── DOWNLOAD BILL ───────────────────────────────────────────────────────
+  // FIX 2: expo-print and expo-sharing are lazy-imported inside the native
+  // branch so they are never evaluated on web (they throw on web).
   const handleDownloadBill = async () => {
     if (!isBillPaid && amountDue > 0) return;
     setIsDownloading(true);
@@ -326,15 +425,15 @@ export default function BillsTab() {
 
     consolidatedItems.forEach((item) => {
       itemsHtml += `
-        <div style="display: flex; justify-content: space-between; align-items: flex-start; font-size: 14px; margin-bottom: 12px; color: #1f2937;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;font-size:14px;margin-bottom:12px;color:#1f2937;">
           <div>
-             <span style="font-weight: 700;">
-               <span style="color: #6b7280; margin-right: 4px;">${item.quantity}x</span>${item.name}
-             </span>
-             <br>
-             <span style="font-size: 10px; color: #6b7280; text-transform: uppercase;">[ITEM]</span>
+            <span style="font-weight:700;">
+              <span style="color:#6b7280;margin-right:4px;">${item.quantity}x</span>${item.name}
+            </span>
+            <br>
+            <span style="font-size:10px;color:#6b7280;text-transform:uppercase;">[ITEM]</span>
           </div>
-          <span style="font-weight: 800; white-space: nowrap;">
+          <span style="font-weight:800;white-space:nowrap;">
             ${currency}${(item.total_price || 0).toFixed(2)}
           </span>
         </div>
@@ -342,111 +441,30 @@ export default function BillsTab() {
     });
 
     const receiptHTML = `
-      <div style="padding: 30px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #111827; background: #ffffff; max-width: 500px; margin: auto;">
-        
-        ${
-          restaurantLogo
-            ? `<div style="text-align: center; margin-bottom: 16px;">
-                 <img src="${restaurantLogo}" alt="Restaurant Logo" style="max-height: 80px; max-width: 180px; object-fit: contain; border-radius: 8px;" />
-               </div>`
-            : ""
-        }
-
-        <div style="text-align: center; font-size: 26px; font-weight: 900; color: #111827; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px;">
-          ${restaurantName}
-        </div>
-        
-        ${
-          restaurantAddress
-            ? `<div style="text-align: center; font-size: 13px; color: #4b5563; margin-bottom: 8px; line-height: 1.4; padding-left: 20px; padding-right: 20px;">
-                 ${restaurantAddress}
-               </div>`
-            : ""
-        }
-
-        <div style="text-align: center; font-size: 12px; color: #6b7280; margin-bottom: 30px;">
-          ${dateStr}
-        </div>
-
-        <div style="background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px;">
-          
-          <div style="text-align: center; font-size: 22px; font-weight: 900; margin-bottom: 4px;">${isRoom ? "ROOM" : "TABLE"} ${tableNum}</div>
-          <div style="text-align: center; font-size: 10px; font-weight: 700; color: #6b7280; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 24px;">FINAL BILLING SUMMARY</div>
-
-          <div style="background-color: #f3f4f6; padding: 10px 14px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; font-size: 14px; font-weight: 700; margin-bottom: 24px;">
+      <div style="padding:30px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827;background:#ffffff;max-width:500px;margin:auto;">
+        ${restaurantLogo ? `<div style="text-align:center;margin-bottom:16px;"><img src="${restaurantLogo}" alt="Restaurant Logo" style="max-height:80px;max-width:180px;object-fit:contain;border-radius:8px;" /></div>` : ""}
+        <div style="text-align:center;font-size:26px;font-weight:900;color:#111827;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px;">${restaurantName}</div>
+        ${restaurantAddress ? `<div style="text-align:center;font-size:13px;color:#4b5563;margin-bottom:8px;line-height:1.4;padding:0 20px;">${restaurantAddress}</div>` : ""}
+        <div style="text-align:center;font-size:12px;color:#6b7280;margin-bottom:30px;">${dateStr}</div>
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:24px;">
+          <div style="text-align:center;font-size:22px;font-weight:900;margin-bottom:4px;">${isRoom ? "ROOM" : "TABLE"} ${tableNum}</div>
+          <div style="text-align:center;font-size:10px;font-weight:700;color:#6b7280;letter-spacing:.1em;text-transform:uppercase;margin-bottom:24px;">FINAL BILLING SUMMARY</div>
+          <div style="background:#f3f4f6;padding:10px 14px;border-radius:8px;display:flex;justify-content:space-between;align-items:center;font-size:14px;font-weight:700;margin-bottom:24px;">
             <span>👑 HOST: ${displayHostName}</span>
-            <span style="font-weight: 400; font-size: 12px; color: #6b7280;">(${totalItemsCount} Items)</span>
+            <span style="font-weight:400;font-size:12px;color:#6b7280;">(${totalItemsCount} Items)</span>
           </div>
-
-          <div style="margin-bottom: 24px;">
-            ${itemsHtml}
-          </div>
-
-          <div style="border-top: 2px solid #111827; padding-top: 16px; margin-top: 24px;">
-            <div style="display: flex; justify-content: space-between; font-size: 14px; color: #4b5563; margin-bottom: 8px;">
-              <span>Total Orders Delivered:</span>
-              <span>${totalItemsCount}</span>
-            </div>
-            
-            <div style="display: flex; justify-content: space-between; font-size: 14px; color: #111827; font-weight: 700; margin-bottom: 8px; margin-top: 12px;">
-              <span>Subtotal:</span>
-              <span>${currency}${finalSubtotal.toFixed(2)}</span>
-            </div>
-
-            ${
-              finalDiscount > 0
-                ? `
-            <div style="display: flex; justify-content: space-between; font-size: 14px; color: #059669; margin-bottom: 8px;">
-              <span>Discount:</span>
-              <span style="font-weight: 700;">- ${currency}${finalDiscount.toFixed(2)}</span>
-            </div>`
-                : ""
-            }
-
-            ${
-              finalTax > 0
-                ? `
-            <div style="display: flex; justify-content: space-between; font-size: 14px; color: #dc2626; margin-bottom: 8px;">
-              <span>Tax:</span>
-              <span style="font-weight: 700;">+ ${currency}${finalTax.toFixed(2)}</span>
-            </div>`
-                : ""
-            }
-
-            ${
-              finalExtraCharges > 0
-                ? `
-            <div style="display: flex; justify-content: space-between; font-size: 14px; color: #111827; margin-bottom: 8px;">
-              <span>Extra Charges:</span>
-              <span style="font-weight: 700;">+ ${currency}${finalExtraCharges.toFixed(2)}</span>
-            </div>`
-                : ""
-            }
-
-            <div style="display: flex; justify-content: space-between; font-size: 18px; font-weight: 900; color: #111827; margin-top: 16px; padding-top: 12px; border-top: 1px dashed #d1d5db;">
-              <span>GRAND TOTAL</span>
-              <span>${currency}${calculatedGrandTotal.toFixed(2)}</span>
-            </div>
-            
-            ${
-              amountPaid > 0
-                ? `
-            <div style="display: flex; justify-content: space-between; font-size: 14px; font-weight: 700; color: #059669; margin-top: 8px;">
-              <span>Already Paid</span>
-              <span>- ${currency}${amountPaid.toFixed(2)}</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; font-size: 18px; font-weight: 900; color: #dc2626; margin-top: 8px;">
-              <span>AMOUNT DUE</span>
-              <span>${currency}${amountDue.toFixed(2)}</span>
-            </div>`
-                : ""
-            }
+          <div style="margin-bottom:24px;">${itemsHtml}</div>
+          <div style="border-top:2px solid #111827;padding-top:16px;margin-top:24px;">
+            <div style="display:flex;justify-content:space-between;font-size:14px;color:#4b5563;margin-bottom:8px;"><span>Total Orders Delivered:</span><span>${totalItemsCount}</span></div>
+            <div style="display:flex;justify-content:space-between;font-size:14px;color:#111827;font-weight:700;margin-bottom:8px;margin-top:12px;"><span>Subtotal:</span><span>${currency}${finalSubtotal.toFixed(2)}</span></div>
+            ${finalDiscount > 0 ? `<div style="display:flex;justify-content:space-between;font-size:14px;color:#059669;margin-bottom:8px;"><span>Discount:</span><span style="font-weight:700;">- ${currency}${finalDiscount.toFixed(2)}</span></div>` : ""}
+            ${finalTax > 0 ? `<div style="display:flex;justify-content:space-between;font-size:14px;color:#dc2626;margin-bottom:8px;"><span>Tax:</span><span style="font-weight:700;">+ ${currency}${finalTax.toFixed(2)}</span></div>` : ""}
+            ${finalExtraCharges > 0 ? `<div style="display:flex;justify-content:space-between;font-size:14px;color:#111827;margin-bottom:8px;"><span>Extra Charges:</span><span style="font-weight:700;">+ ${currency}${finalExtraCharges.toFixed(2)}</span></div>` : ""}
+            <div style="display:flex;justify-content:space-between;font-size:18px;font-weight:900;color:#111827;margin-top:16px;padding-top:12px;border-top:1px dashed #d1d5db;"><span>GRAND TOTAL</span><span>${currency}${calculatedGrandTotal.toFixed(2)}</span></div>
+            ${amountPaid > 0 ? `<div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;color:#059669;margin-top:8px;"><span>Already Paid</span><span>- ${currency}${amountPaid.toFixed(2)}</span></div><div style="display:flex;justify-content:space-between;font-size:18px;font-weight:900;color:#dc2626;margin-top:8px;"><span>AMOUNT DUE</span><span>${currency}${amountDue.toFixed(2)}</span></div>` : ""}
           </div>
         </div>
-
-        <div style="text-align: center; margin-top: 40px; font-size: 12px; font-weight: 600; color: #6b7280;">
-          Thank You for Visiting!
-        </div>
+        <div style="text-align:center;margin-top:40px;font-size:12px;font-weight:600;color:#6b7280;">Thank You for Visiting!</div>
       </div>
     `;
 
@@ -455,13 +473,11 @@ export default function BillsTab() {
         const generateWebPDF = () => {
           const opt = {
             margin: 0.5,
-            // 👇 Dynamic PDF Download Filename
             filename: `Bill_${isRoom ? "Room" : "Table"}_${tableNum}.pdf`,
             image: { type: "jpeg", quality: 0.98 },
             html2canvas: { scale: 2 },
             jsPDF: { unit: "in", format: "letter", orientation: "portrait" },
           };
-
           (window as any)
             .html2pdf()
             .set(opt)
@@ -480,6 +496,9 @@ export default function BillsTab() {
           generateWebPDF();
         }
       } else {
+        // FIX 2: Lazy import so these native-only modules are never loaded on web
+        const Print = await import("expo-print");
+        const Sharing = await import("expo-sharing");
         const { uri } = await Print.printToFileAsync({ html: receiptHTML });
         await Sharing.shareAsync(uri, {
           UTI: ".pdf",
@@ -489,11 +508,22 @@ export default function BillsTab() {
       }
     } catch (err) {
       setIsDownloading(false);
-      Alert.alert("Error", "Could not generate PDF bill.");
+      if (Platform.OS === "web") {
+        window.alert("Could not generate PDF bill.");
+      } else {
+        Alert.alert("Error", "Could not generate PDF bill.");
+      }
     }
   };
+  // ─────────────────────────────────────────────────────────────────────────
 
-  const activeMethod = paymentData?.payment_method || "upi";
+  // ─── FIX 3: activeMethod ─────────────────────────────────────────────────
+  // Before: payment_method values of "online" or "pending" fell through to
+  // the raw value, which matched neither "upi" nor "cash", so the Razorpay
+  // button section was never rendered.
+  // After:  anything other than "cash" is treated as the UPI / Razorpay tab.
+  const activeMethod = paymentData?.payment_method === "cash" ? "cash" : "upi";
+  // ─────────────────────────────────────────────────────────────────────────
 
   return (
     <View style={styles.mainWrapper}>
@@ -577,10 +607,10 @@ export default function BillsTab() {
                 </Text>
               </View>
 
+              {/* Order Items Card */}
               <View style={styles.card}>
                 <View style={styles.cardHeader}>
                   <Text style={styles.cardTitle}>Order Items</Text>
-                  {/* 👇 Dynamic Table/Room Label */}
                   <Text style={styles.tableBadge}>
                     {isRoom ? "Room" : "Table"} #{tableNum}
                   </Text>
@@ -643,6 +673,7 @@ export default function BillsTab() {
                 </View>
               </View>
 
+              {/* Payment Method Card */}
               {!isBillPaid && amountDue > 0 && paymentData && (
                 <View style={styles.card}>
                   <Text style={styles.cardTitle}>Payment Method</Text>
@@ -656,8 +687,8 @@ export default function BillsTab() {
                       onPress={() => handleSelectMethod("upi")}
                     >
                       <Ionicons
-                        name="qr-code"
-                        size={20}
+                        name="card"
+                        size={22}
                         color={
                           activeMethod === "upi"
                             ? ANN.darkBlue
@@ -670,7 +701,7 @@ export default function BillsTab() {
                           activeMethod === "upi" && styles.methodTextActive,
                         ]}
                       >
-                        Digital (UPI)
+                        Pay via UPI
                       </Text>
                     </TouchableOpacity>
 
@@ -683,7 +714,7 @@ export default function BillsTab() {
                     >
                       <Ionicons
                         name="wallet"
-                        size={20}
+                        size={22}
                         color={
                           activeMethod === "cash"
                             ? ANN.darkBlue
@@ -702,15 +733,56 @@ export default function BillsTab() {
                   </View>
 
                   {activeMethod === "upi" && (
-                    <View style={styles.qrDisplayBox}>
-                      <View style={styles.qrInner}>
-                        {upiId ? (
-                          <QRCode value={upiString} size={140} />
+                    <View style={styles.upiDisplayBox}>
+                      <Text style={styles.upiSubtitle}>
+                        Pay instantly via UPI, Credit Card, or Netbanking
+                      </Text>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.razorpayBtn,
+                          isProcessingPayment && { opacity: 0.8 },
+                        ]}
+                        onPress={handleRazorpayPayment}
+                        disabled={isProcessingPayment}
+                      >
+                        {isProcessingPayment ? (
+                          <ActivityIndicator color="#ffffff" />
                         ) : (
-                          <Text>UPI ID not found</Text>
+                          <>
+                            <Ionicons
+                              name="lock-closed"
+                              size={16}
+                              color="#ffffff"
+                            />
+                            <Text style={styles.razorpayBtnText}>
+                              Pay {currency}
+                              {amountDue.toFixed(2)} Securely
+                            </Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+
+                      <View style={styles.dividerContainer}>
+                        <View style={styles.dividerLine} />
+                        <Text style={styles.dividerText}>OR</Text>
+                        <View style={styles.dividerLine} />
+                      </View>
+
+                      <Text style={styles.qrFallbackText}>
+                        Scan QR Code manually via any UPI App
+                      </Text>
+                      <View style={styles.qrInnerSmall}>
+                        {upiId ? (
+                          <QRCode value={upiString} size={110} />
+                        ) : (
+                          <Text
+                            style={{ color: THEME.textSecondary, fontSize: 12 }}
+                          >
+                            UPI not available
+                          </Text>
                         )}
                       </View>
-                      <Text style={styles.qrScanText}>SCAN TO PAY</Text>
                     </View>
                   )}
 
@@ -730,6 +802,7 @@ export default function BillsTab() {
                 </View>
               )}
 
+              {/* Bill Breakdown Card */}
               <View style={styles.card}>
                 <Text style={styles.cardTitle}>Bill Breakdown</Text>
 
@@ -806,16 +879,14 @@ export default function BillsTab() {
 
                 {amountDue > 0 && (
                   <View style={styles.grandTotalRow}>
-                    <View>
-                      <Text
-                        style={[
-                          styles.grandTotalLabel,
-                          { color: THEME.danger, fontSize: 18 },
-                        ]}
-                      >
-                        Amount Due
-                      </Text>
-                    </View>
+                    <Text
+                      style={[
+                        styles.grandTotalLabel,
+                        { color: THEME.danger, fontSize: 18 },
+                      ]}
+                    >
+                      Amount Due
+                    </Text>
                     <Text
                       style={[
                         styles.grandTotalValue,
@@ -1024,38 +1095,60 @@ const styles = StyleSheet.create({
     color: THEME.textSecondary,
   },
   methodTextActive: { color: ANN.darkBlue, fontWeight: "800" },
-  qrDisplayBox: {
+  upiDisplayBox: {
     backgroundColor: ANN.darkBlueLight,
     borderRadius: 12,
     padding: 20,
     alignItems: "center",
   },
-  qrInner: {
-    backgroundColor: "#fff",
-    padding: 12,
-    borderRadius: 8,
+  upiSubtitle: {
+    fontSize: 13,
+    color: ANN.darkBlue,
+    textAlign: "center",
+    fontWeight: "600",
     marginBottom: 16,
   },
-  qrScanText: {
-    fontSize: 12,
-    fontWeight: "bold",
-    color: THEME.textSecondary,
-    letterSpacing: 1,
+  razorpayBtn: {
+    backgroundColor: ANN.darkBlue,
+    width: "100%",
+    paddingVertical: 14,
+    borderRadius: 10,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 8,
+    shadowColor: ANN.darkBlue,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 4,
   },
-  qrMerchantText: {
-    fontSize: 13,
-    color: "#111827",
-    marginTop: 4,
+  razorpayBtnText: {
+    color: "#ffffff",
+    fontSize: 15,
+    fontWeight: "bold",
+    letterSpacing: 0.5,
+  },
+  dividerContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    width: "100%",
+    marginVertical: 20,
+  },
+  dividerLine: { flex: 1, height: 1, backgroundColor: "rgba(42,71,149,0.2)" },
+  dividerText: {
+    marginHorizontal: 12,
+    fontSize: 12,
+    color: THEME.textSecondary,
+    fontWeight: "bold",
+  },
+  qrFallbackText: {
+    fontSize: 12,
+    color: THEME.textSecondary,
+    marginBottom: 12,
     fontWeight: "500",
   },
-  openUpiBtn: {
-    marginTop: 16,
-    backgroundColor: ANN.darkBlue,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 20,
-  },
-  openUpiBtnText: { color: "#fff", fontSize: 13, fontWeight: "bold" },
+  qrInnerSmall: { backgroundColor: "#ffffff", padding: 10, borderRadius: 8 },
   cashDisplayBox: {
     backgroundColor: ANN.orangeLight,
     borderRadius: 12,
@@ -1145,24 +1238,6 @@ const styles = StyleSheet.create({
     color: THEME.textSecondary,
     letterSpacing: 0.5,
   },
-  infoBanner: {
-    flexDirection: "row",
-    backgroundColor: "rgba(69, 106, 186, 0.1)",
-    padding: 16,
-    borderRadius: 12,
-    alignItems: "flex-start",
-    gap: 12,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: "rgba(42, 71, 149, 0.15)",
-  },
-  infoBannerText: {
-    flex: 1,
-    fontSize: 13,
-    color: ANN.darkBlue,
-    lineHeight: 18,
-    fontWeight: "500",
-  },
   emptyState: {
     flex: 1,
     justifyContent: "center",
@@ -1191,4 +1266,22 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   askBillBtnText: { color: "#fff", fontWeight: "bold", fontSize: 15 },
+  infoBanner: {
+    flexDirection: "row",
+    backgroundColor: "rgba(69,106,186,0.1)",
+    padding: 16,
+    borderRadius: 12,
+    alignItems: "flex-start",
+    gap: 12,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: "rgba(42,71,149,0.15)",
+  },
+  infoBannerText: {
+    flex: 1,
+    fontSize: 13,
+    color: ANN.darkBlue,
+    lineHeight: 18,
+    fontWeight: "500",
+  },
 });

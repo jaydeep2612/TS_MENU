@@ -36,7 +36,6 @@ export default function OrdersTab() {
   const { sessionToken, tableData, menuData, orders, setOrders, clearSession } =
     useSession();
 
-  // 👇 ADDED: Extract type
   const isRoom = tableData?.type === "room";
 
   const [loading, setLoading] = useState(true);
@@ -288,7 +287,7 @@ export default function OrdersTab() {
         text: "Payment Required",
         icon: "wallet-outline",
       };
-    if (s === "accepted")
+    if (s === "accepted" || s === "partial_accepted")
       return {
         color: THEME.primary,
         bg: THEME.primary,
@@ -362,7 +361,6 @@ export default function OrdersTab() {
       : parseFloat(String(order.total_amount)) || 0;
     const displayOrderNumber = displayOrders.length - index;
 
-    // 👇 Updated UPI String
     const upiId = menuData?.restaurant?.upi_id || "";
     const restaurantName = menuData?.restaurant?.name || "Restaurant";
     const pa = encodeURIComponent(upiId);
@@ -375,6 +373,7 @@ export default function OrdersTab() {
 
     return (
       <View
+        key={`order-card-${order.id}`}
         style={[
           styles.orderCard,
           isCancelled && { opacity: 0.5, borderColor: THEME.danger },
@@ -419,30 +418,55 @@ export default function OrdersTab() {
         <View style={styles.itemsList}>
           {Array.isArray(order.items) &&
             order.items.map((item: any, i: number) => {
+              // 👇 Yahan update karein: 0 qty ko force karein taaki out-of-stock items dikhein
+              const qty =
+                item.quantity !== null && item.quantity !== undefined
+                  ? Number(item.quantity)
+                  : 1;
               const unitPrice =
                 parseFloat(String(item.unit_price || item.price || 0)) || 0;
-              const qty = parseInt(String(item.quantity || 1), 10) || 1;
-              const totalPrice =
-                parseFloat(String(item.total_price || unitPrice * qty)) || 0;
+              const totalPrice = parseFloat(String(item.total_price)) || 0;
+
+              // Agar quantity 0 hai, toh item "Out of Stock" mark hogi
+              const isItemRemoved = qty === 0;
 
               return (
-                <View key={`item-${item.id || i}`} style={styles.orderItem}>
+                <View
+                  key={`order-item-${item.id || i}`}
+                  style={[styles.orderItem, isItemRemoved && { opacity: 0.6 }]} // Thoda dim kar dein
+                >
                   <View
                     style={{ flexDirection: "row", flex: 1, paddingRight: 12 }}
                   >
-                    <Text
-                      style={[
-                        styles.itemQtyBadge,
-                        isCancelled && { color: THEME.textSecondary },
-                      ]}
-                    >
-                      {qty}x
-                    </Text>
+                    {/* 👇 Agar qty 0 hai, toh "Out of Stock" dikhayein */}
+                    {isItemRemoved ? (
+                      <Text
+                        style={{
+                          color: THEME.danger,
+                          fontWeight: "900",
+                          fontSize: 11,
+                          marginRight: 8,
+                          marginTop: 2,
+                        }}
+                      >
+                        ⚠️ OOS
+                      </Text>
+                    ) : (
+                      <Text
+                        style={[
+                          styles.itemQtyBadge,
+                          isCancelled && { color: THEME.textSecondary },
+                        ]}
+                      >
+                        {qty}x
+                      </Text>
+                    )}
+
                     <View style={{ flex: 1 }}>
                       <Text
                         style={[
                           styles.itemText,
-                          isCancelled && {
+                          (isCancelled || isItemRemoved) && {
                             textDecorationLine: "line-through",
                             color: THEME.textSecondary,
                           },
@@ -451,15 +475,17 @@ export default function OrdersTab() {
                       >
                         {item.menu_item?.name || item.item_name || "Menu Item"}
                       </Text>
-                      {item.notes && (
+                      {item.notes && !isItemRemoved && (
                         <Text style={styles.itemNote}>Note: {item.notes}</Text>
                       )}
                     </View>
                   </View>
+
+                  {/* Agar item removed hai, toh price bhi strikethrough karein */}
                   <Text
                     style={[
                       styles.itemPrice,
-                      isCancelled && {
+                      (isCancelled || isItemRemoved) && {
                         textDecorationLine: "line-through",
                         color: THEME.textSecondary,
                       },
